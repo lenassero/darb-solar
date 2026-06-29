@@ -1,0 +1,190 @@
+"""Streamlit dashboard for daily plant power history."""
+
+from __future__ import annotations
+
+import os
+import sqlite3
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
+
+import streamlit as st
+from dotenv import load_dotenv
+
+from darb_solar.db import (
+    PROJECT_ROOT,
+    get_connection,
+    get_latest_plant_synced_at,
+    get_plant,
+    resolve_db_path,
+)
+from darb_solar.viz.daily import (
+    build_daily_chart,
+    build_daily_donut_chart,
+    load_day_data,
+)
+
+
+def _format_kwh(value: float) -> str:
+    return f"{value:.1f}".replace(".", ",")
+
+
+def _render_colored_metric(
+    container: st.delta_generator.DeltaGenerator,
+    *,
+    label: str,
+    value_kwh: float,
+    fg_color: str,
+    bg_color: str,
+) -> None:
+    formatted = _format_kwh(value_kwh)
+    container.markdown(
+        (
+            f'<div style="background-color:{bg_color};color:{fg_color};'
+            'padding:0.75rem 1rem;border-radius:0.75rem;">'
+            f'<span style="font-size:1.5rem;font-weight:700;">{formatted}</span>'
+            f"<span> kWh {label}</span></div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+def _render_energy_totals(
+    totals: list[tuple[str, float, str, str]],
+) -> None:
+    top_left, top_right = st.columns(2)
+    for container, total in zip((top_left, top_right), totals[:2], strict=True):
+        label, kwh, fg_color, bg_color = total
+        _render_colored_metric(
+            container,
+            label=label,
+            value_kwh=kwh,
+            fg_color=fg_color,
+            bg_color=bg_color,
+        )
+
+    _, bottom_center, _ = st.columns([1, 2, 1])
+    label, kwh, fg_color, bg_color = totals[2]
+    _render_colored_metric(
+        bottom_center,
+        label=label,
+        value_kwh=kwh,
+        fg_color=fg_color,
+        bg_color=bg_color,
+    )
+
+
+def _shift_selected_date(days: int) -> None:
+    st.session_state.selected_date += timedelta(days=days)
+
+
+def _day_bounds(day: date, tz: ZoneInfo) -> tuple[datetime, datetime]:
+    day_start = datetime(day.year, day.month, day.day, tzinfo=tz)
+    return day_start, day_start + timedelta(days=1)
+
+
+def _format_last_updated(synced_at: str | None, tz: ZoneInfo) -> str:
+    # synced_at is stored as UTC by the sync CLI; show it in plant-local time.
+    if synced_at is None:
+        return "aucune donnée synchronisée"
+    dt = datetime.fromisoformat(synced_at)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+    local = dt.astimezone(tz)
+    return local.strftime("%d/%m/%Y à %H:%M")
+
+
+def _render_date_header(
+    *,
+    connection: sqlite3.Connection,
+    plant_code: str,
+    tz: ZoneInfo,
+) -> date:
+    if "selected_date" not in st.session_state:
+        st.session_state.selected_date = datetime.now(tz).date()
+
+    _, nav_col, _ = st.columns([1, 2, 1])
+    prev_col, date_col, next_col = nav_col.columns(
+        [0.1, 1, 0.4],
+    )
+
+    prev_col.button(
+        "◀",
+        key="prev_day",
+        on_click=_shift_selected_date,
+        args=(-1,),
+    )
+    date_col.date_input("Date", key="selected_date", label_visibility="collapsed")
+    next_col.button(
+        "▶",
+        key="next_day",
+        on_click=_shift_selected_date,
+        args=(1,),
+    )
+
+    selected_date = st.session_state.selected_date
+    day_start, day_end = _day_bounds(selected_date, tz)
+    synced_at = get_latest_plant_synced_at(
+        connection,
+        plant_code=plant_code,
+        collected_from=day_start.isoformat(),
+        collected_to=day_end.isoformat(),
+    )
+    updated_label = _format_last_updated(synced_at, tz)
+    with date_col:
+        st.caption(f"Dernière mise à jour : {updated_label}")
+
+    return selected_date
+
+
+def main() -> None:
+    """Run the daily PV history dashboard."""
+    load_dotenv(PROJECT_ROOT / ".env")
+
+    st.set_page_config(page_title="Darb Solar", layout="wide")
+    st.title("Production solaire")
+
+    plant_code = os.environ.get("DARB_SOLAR_PLANT_CODE")
+    if not plant_code:
+        st.error("Set DARB_SOLAR_PLANT_CODE in the environment or .env file.")
+        return
+
+    db_path = resolve_db_path()
+    connection = get_connection(db_path)
+    try:
+        plant = get_plant(connection, plant_code)
+        if plant is None:
+            st.error(
+                f"Plant {plant_code!r} is not in the database. "
+                "Run scripts/bootstrap_plant.py first."
+            )
+            return
+
+        tz = ZoneInfo(plant["timezone"])
+        selected_date = _render_date_header(
+            connection=connection,
+            plant_code=plant_code,
+            tz=tz,
+        )
+
+        df = load_day_data(connection, plant_code, selected_date, tz)
+        if df.empty:
+            st.info("No data for this date.")
+            return
+        donut_fig = build_daily_donut_chart(df)
+        _, donut_col, _ = st.columns([1, 1, 1])
+        donut_col.plotly_chart(donut_fig, use_container_width=True)
+        show_detail = st.toggle("Détail (5 min)", value=False)
+        fig = build_daily_chart(df, detail=show_detail)
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config={"scrollZoom": True},
+        )
+
+
+    finally:
+        connection.close()
+
+
+if __name__ == "__main__":
+    main()
