@@ -1,0 +1,11 @@
+# Local SQLite database, sync logs, and other runtime artifacts
+data/
+
+# Environment and virtualenv
+.env
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
