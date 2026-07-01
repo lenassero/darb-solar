@@ -9,8 +9,10 @@ dependencies = [
   "matplotlib",
   "pandas",
   "plotly>=6.8.0",
+  "psycopg[binary]",
   "python-dotenv",
   "requests",
+  "sqlalchemy>=2.0",
   "streamlit>=1.58.0",
 ]
  

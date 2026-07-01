@@ -1,4 +1,4 @@
-# Local SQLite database, sync logs, and other runtime artifacts
+# Sync logs and runtime artifacts
 data/
 
 # Environment and virtualenv

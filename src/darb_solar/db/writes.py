@@ -1,20 +1,15 @@
-"""Write queries for FusionSolar SQLite data."""
+"""Write queries for FusionSolar Postgres data."""
 
 from __future__ import annotations
 
-import sqlite3
-from pathlib import Path
-from typing import Iterable
+from typing import Any
 
-from darb_solar.db.connection import get_connection
-from darb_solar.db.sql import (
-    UPSERT_DEVICE_POWER_READING_SQL,
-    UPSERT_DEVICE_SQL,
-    UPSERT_PLANT_POWER_READING_SQL,
-    UPSERT_PLANT_SQL,
-    UPSERT_SYNC_WINDOW_SQL,
-)
-from darb_solar.db.types import (
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.dialects.postgresql import insert
+
+from darb_solar.db.connection import DbSession
+from darb_solar.db.models import (
+    Base,
     Device,
     DevicePowerReading,
     Plant,
@@ -22,216 +17,146 @@ from darb_solar.db.types import (
     SyncWindow,
 )
 
+_PLANT_UPSERT = insert(Plant).on_conflict_do_update(
+    index_elements=[Plant.plant_code],
+    set_={
+        "plant_name": insert(Plant).excluded.plant_name,
+        "timezone": insert(Plant).excluded.timezone,
+    },
+)
 
-def _upsert_many(
-    sql: str,
-    rows: Iterable[object],
-    *,
-    db_path: Path | None = None,
-) -> int:
-    rows_list = list(rows)
-    if not rows_list:
-        return 0
+_DEVICE_UPSERT = insert(Device).on_conflict_do_update(
+    index_elements=[Device.dev_id],
+    set_={
+        "plant_code": insert(Device).excluded.plant_code,
+        "dev_dn": insert(Device).excluded.dev_dn,
+        "dev_type_id": insert(Device).excluded.dev_type_id,
+        "role": insert(Device).excluded.role,
+    },
+)
 
-    with get_connection(db_path) as connection:
-        connection.executemany(sql, rows_list)
-        connection.commit()
-    return len(rows_list)
+_DEVICE_POWER_READING_UPSERT = insert(DevicePowerReading).on_conflict_do_update(
+    index_elements=[
+        DevicePowerReading.dev_id,
+        DevicePowerReading.collected_at,
+    ],
+    set_={
+        "active_power_kw": insert(DevicePowerReading).excluded.active_power_kw,
+        "synced_at": insert(DevicePowerReading).excluded.synced_at,
+    },
+)
+
+_PLANT_POWER_READING_UPSERT = insert(PlantPowerReading).on_conflict_do_update(
+    index_elements=[
+        PlantPowerReading.plant_code,
+        PlantPowerReading.collected_at,
+    ],
+    set_={
+        "pv_production_kw": insert(PlantPowerReading).excluded.pv_production_kw,
+        "grid_export_kw": insert(PlantPowerReading).excluded.grid_export_kw,
+        "consumption_kw": insert(PlantPowerReading).excluded.consumption_kw,
+        "synced_at": insert(PlantPowerReading).excluded.synced_at,
+    },
+)
+
+_SYNC_WINDOW_UPSERT = insert(SyncWindow).on_conflict_do_update(
+    index_elements=[SyncWindow.dev_id, SyncWindow.window_start],
+    set_={
+        "window_end": insert(SyncWindow).excluded.window_end,
+        "status": insert(SyncWindow).excluded.status,
+        "error_message": insert(SyncWindow).excluded.error_message,
+        "updated_at": insert(SyncWindow).excluded.updated_at,
+    },
+)
+
+
+def _as_mapping(instance: Base) -> dict[str, Any]:
+    """Return column values from an ORM instance for upsert."""
+    return {
+        attr.key: getattr(instance, attr.key)
+        for attr in sa_inspect(instance).mapper.column_attrs
+    }
+
+
+def _upsert(session: DbSession, upsert_stmt: object, instance: Base) -> None:
+    session.execute(upsert_stmt, _as_mapping(instance))
 
 
 def upsert_plant(
-    connection: sqlite3.Connection,
+    session: DbSession,
     plant: Plant,
 ) -> None:
-    """Insert or update a single plant row.
+    """Insert or update a plant row.
 
     Parameters
     ----------
-    connection : sqlite3.Connection
-        Open SQLite connection.
+    session : DbSession
+        Open SQLAlchemy session. Caller owns ``commit()``.
     plant : Plant
         Plant metadata to store.
     """
-    connection.execute(UPSERT_PLANT_SQL, plant)
-
-
-def upsert_plants(
-    plants: Iterable[Plant],
-    *,
-    db_path: Path | None = None,
-) -> int:
-    """Insert or update many plant rows in one transaction.
-
-    Parameters
-    ----------
-    plants : Iterable[Plant]
-        Plant metadata records to store.
-    db_path : Path or None, optional
-        Path to the SQLite database file.
-
-    Returns
-    -------
-    int
-        Number of rows written.
-    """
-    return _upsert_many(UPSERT_PLANT_SQL, plants, db_path=db_path)
+    _upsert(session, _PLANT_UPSERT, plant)
 
 
 def upsert_device(
-    connection: sqlite3.Connection,
+    session: DbSession,
     device: Device,
 ) -> None:
-    """Insert or update a single device row.
+    """Insert or update a device row.
 
     Parameters
     ----------
-    connection : sqlite3.Connection
-        Open SQLite connection.
+    session : DbSession
+        Open SQLAlchemy session. Caller owns ``commit()``.
     device : Device
         Device metadata to store.
     """
-    connection.execute(UPSERT_DEVICE_SQL, device)
-
-
-def upsert_devices(
-    devices: Iterable[Device],
-    *,
-    db_path: Path | None = None,
-) -> int:
-    """Insert or update many device rows in one transaction.
-
-    Parameters
-    ----------
-    devices : Iterable[Device]
-        Device metadata records to store.
-    db_path : Path or None, optional
-        Path to the SQLite database file.
-
-    Returns
-    -------
-    int
-        Number of rows written.
-    """
-    return _upsert_many(UPSERT_DEVICE_SQL, devices, db_path=db_path)
+    _upsert(session, _DEVICE_UPSERT, device)
 
 
 def upsert_device_power_reading(
-    connection: sqlite3.Connection,
+    session: DbSession,
     reading: DevicePowerReading,
 ) -> None:
-    """Insert or update a single device power reading.
+    """Insert or update a device power reading.
 
     Parameters
     ----------
-    connection : sqlite3.Connection
-        Open SQLite connection.
+    session : DbSession
+        Open SQLAlchemy session. Caller owns ``commit()``.
     reading : DevicePowerReading
         Reading to store.
     """
-    connection.execute(UPSERT_DEVICE_POWER_READING_SQL, reading)
-
-
-def upsert_device_power_readings(
-    readings: Iterable[DevicePowerReading],
-    *,
-    db_path: Path | None = None,
-) -> int:
-    """Insert or update many device power readings in one transaction.
-
-    Parameters
-    ----------
-    readings : Iterable[DevicePowerReading]
-        Readings to store.
-    db_path : Path or None, optional
-        Path to the SQLite database file.
-
-    Returns
-    -------
-    int
-        Number of rows written.
-    """
-    return _upsert_many(
-        UPSERT_DEVICE_POWER_READING_SQL,
-        readings,
-        db_path=db_path,
-    )
+    _upsert(session, _DEVICE_POWER_READING_UPSERT, reading)
 
 
 def upsert_plant_power_reading(
-    connection: sqlite3.Connection,
+    session: DbSession,
     reading: PlantPowerReading,
 ) -> None:
-    """Insert or update a single plant power reading.
+    """Insert or update a plant power reading.
 
     Parameters
     ----------
-    connection : sqlite3.Connection
-        Open SQLite connection.
+    session : DbSession
+        Open SQLAlchemy session. Caller owns ``commit()``.
     reading : PlantPowerReading
         Derived plant metrics to store.
     """
-    connection.execute(UPSERT_PLANT_POWER_READING_SQL, reading)
-
-
-def upsert_plant_power_readings(
-    readings: Iterable[PlantPowerReading],
-    *,
-    db_path: Path | None = None,
-) -> int:
-    """Insert or update many plant power readings in one transaction.
-
-    Parameters
-    ----------
-    readings : Iterable[PlantPowerReading]
-        Derived plant metrics to store.
-    db_path : Path or None, optional
-        Path to the SQLite database file.
-
-    Returns
-    -------
-    int
-        Number of rows written.
-    """
-    return _upsert_many(
-        UPSERT_PLANT_POWER_READING_SQL,
-        readings,
-        db_path=db_path,
-    )
+    _upsert(session, _PLANT_POWER_READING_UPSERT, reading)
 
 
 def upsert_sync_window(
-    connection: sqlite3.Connection,
+    session: DbSession,
     window: SyncWindow,
 ) -> None:
-    """Insert or update a single sync window checkpoint.
+    """Insert or update a sync window checkpoint.
 
     Parameters
     ----------
-    connection : sqlite3.Connection
-        Open SQLite connection.
+    session : DbSession
+        Open SQLAlchemy session. Caller owns ``commit()``.
     window : SyncWindow
         Sync window state to store.
     """
-    connection.execute(UPSERT_SYNC_WINDOW_SQL, window)
-
-
-def upsert_sync_windows(
-    windows: Iterable[SyncWindow],
-    *,
-    db_path: Path | None = None,
-) -> int:
-    """Insert or update many sync windows in one transaction.
-
-    Parameters
-    ----------
-    windows : Iterable[SyncWindow]
-        Sync window states to store.
-    db_path : Path or None, optional
-        Path to the SQLite database file.
-
-    Returns
-    -------
-    int
-        Number of rows written.
-    """
-    return _upsert_many(UPSERT_SYNC_WINDOW_SQL, windows, db_path=db_path)
+    _upsert(session, _SYNC_WINDOW_UPSERT, window)

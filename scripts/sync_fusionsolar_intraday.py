@@ -1,4 +1,4 @@
-"""CLI to incrementally sync today's FusionSolar history into SQLite."""
+"""CLI to incrementally sync today's FusionSolar history into Postgres."""
 
 from __future__ import annotations
 
@@ -6,12 +6,11 @@ import argparse
 import os
 import sys
 from datetime import timedelta
-from pathlib import Path
 
 from dotenv import load_dotenv
 from loguru import logger
 
-from darb_solar.db import PROJECT_ROOT, resolve_db_path
+from darb_solar.db import PROJECT_ROOT, resolve_database_url
 from darb_solar.intraday_sync import sync_intraday
 
 
@@ -20,7 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Incrementally sync today's FusionSolar device history "
-            "into a local SQLite database."
+            "into a Postgres database."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -42,13 +41,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--database-url",
         default=None,
-        help="SQLite database URL (sqlite:///...).",
-    )
-    parser.add_argument(
-        "--db-path",
-        type=Path,
-        default=None,
-        help="Path to the SQLite database file (overrides --database-url).",
+        help=(
+            "Override DARB_SOLAR_DATABASE_URL for this run "
+            "(postgresql+psycopg://...)."
+        ),
     )
     return parser
 
@@ -73,21 +69,14 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("--min-gap-minutes must be at least 1.")
         return 1
 
-    try:
-        db_path = resolve_db_path(
-            args.db_path,
-            database_url=args.database_url,
-        )
-    except ValueError as exc:
-        logger.error(f"{exc}")
-        return 1
+    database_url = resolve_database_url(args.database_url)
 
-    logger.info(f"Using database at {db_path}")
+    logger.info(f"Using database at {database_url}")
 
     try:
         result = sync_intraday(
             plant_code=args.plant_code,
-            db_path=db_path,
+            database_url=database_url,
             min_gap=timedelta(minutes=args.min_gap_minutes),
         )
     except ValueError as exc:

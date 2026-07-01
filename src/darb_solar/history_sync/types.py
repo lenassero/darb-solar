@@ -15,7 +15,7 @@ records ``skipped``, and only the DB layer records ``pending``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from enum import StrEnum
 
 from darb_solar.db import Device, Plant
@@ -26,14 +26,14 @@ class DayWindow:
     """One calendar day in the plant timezone."""
 
     day: date
-    window_start: str
-    window_end: str
+    window_start: datetime
+    window_end: datetime
     start_ms: int
     end_ms: int
 
 
 class SyncRunOutcome(StrEnum):
-    """Per-unit result for a sync attempt (not stored in SQLite).
+    """Per-unit result for a sync attempt (not stored in DB).
 
     For day history, ``skipped`` means no fetch because a ``done`` checkpoint
     already exists. For intraday sync, ``skipped`` means the fetch range was

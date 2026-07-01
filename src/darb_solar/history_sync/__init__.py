@@ -1,4 +1,4 @@
-"""Extract, transform, and load FusionSolar device history into SQLite."""
+"""Extract, transform, and load FusionSolar device history into Postgres."""
 
 from __future__ import annotations
 

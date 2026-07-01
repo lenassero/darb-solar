@@ -1,6 +1,6 @@
 # darb-solar
 
-Python package for syncing FusionSolar plant history into a local SQLite database.
+Python package for syncing FusionSolar plant history into a Postgres database.
 
 ## Setup
 
@@ -20,6 +20,41 @@ uv add <package>
 uv add --dev <package>
 ```
 
+## Local database
+
+This project uses the **Postgres 16** instance already installed on your Mac
+(`/Library/PostgreSQL/16`). Create the application role, database, and tables
+once:
+
+```bash
+# Prompts for the postgres superuser password from install
+./scripts/setup_native_postgres.sh
+
+# Or non-interactive:
+PGPASSWORD='your-postgres-password' ./scripts/setup_native_postgres.sh
+```
+
+The setup script runs `scripts/setup_native_postgres.sql` (role and database)
+and `scripts/setup_schema.sql` (application tables). Re-run only on a fresh
+database; there is no automatic schema migration at runtime.
+
+### Database access
+
+The database layer uses [SQLAlchemy](https://www.sqlalchemy.org/) 2.0 ORM with
+the psycopg3 driver. Row types such as `Plant` and `Device` are ORM model
+classes exported from `darb_solar.db`; open a session with `get_session()`.
+
+Use the psycopg3 driver in `DARB_SOLAR_DATABASE_URL`
+(`postgresql+psycopg://...`).
+
+### Docker alternative
+
+`docker compose up -d` is available if you prefer a containerized database.
+Use a different host port when native Postgres already listens on 5432 (for
+example `5433:5432` in `docker-compose.yml` and update
+`DARB_SOLAR_DATABASE_URL` accordingly). Apply `scripts/setup_schema.sql` to
+the container database once after it starts.
+
 ## Configuration
 
 Create a `.env` file in the project root (never commit it):
@@ -28,9 +63,13 @@ Create a `.env` file in the project root (never commit it):
 FUSIONSOLAR_USERNAME=your@email.com
 FUSIONSOLAR_SYSTEM_CODE=your-system-code
 DARB_SOLAR_PLANT_CODE=NE=182468888
-# Optional: override default sqlite:///.../data/fusionsolar.db
-# DARB_SOLAR_DATABASE_URL=sqlite:////absolute/path/to/fusionsolar.db
+DARB_SOLAR_DATABASE_URL=postgresql+psycopg://darb_solar:darb_solar@localhost:5432/darb_solar
 ```
+
+`DARB_SOLAR_DATABASE_URL` points the application at your local Postgres instance
+(default: `postgresql+psycopg://darb_solar:darb_solar@localhost:5432/darb_solar`). The
+same URL format works for hosted Postgres providers (Neon, Supabase, and
+similar) when you deploy later.
 
 ## Data directory
 
@@ -38,11 +77,10 @@ Runtime artifacts live under `data/`:
 
 | path | purpose |
 |------|---------|
-| `data/fusionsolar.db` | SQLite database (default location) |
 | `data/logs/` | optional sync job stdout/stderr from scheduled runs |
 
-The `data/` directory is listed in `.gitignore` so the database and logs stay
-local. The directory is created automatically on first bootstrap or sync.
+The `data/` directory is listed in `.gitignore` so logs stay local. The
+directory is created automatically on first bootstrap or sync.
 
 ## One-time bootstrap
 

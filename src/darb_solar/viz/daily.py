@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -11,7 +10,9 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import plotly.graph_objects as go
 
+from darb_solar.db import DbSession
 from darb_solar.db.reads import list_plant_power_readings
+from darb_solar.db.models import PlantPowerReading
 
 _FIVE_MINUTES_MS = 5 * 60 * 1000
 _ONE_HOUR_MS = 60 * 60 * 1000
@@ -83,8 +84,22 @@ def _total_consumption_kwh(df: pd.DataFrame) -> float:
         return 0.0
     return df["consumption_kw"].sum() * _INTERVAL_HOURS
 
+def _plant_reading_rows(readings: list[PlantPowerReading]) -> list[dict[str, object]]:
+    return [
+        {
+            "plant_code": reading.plant_code,
+            "collected_at": reading.collected_at,
+            "pv_production_kw": reading.pv_production_kw,
+            "grid_export_kw": reading.grid_export_kw,
+            "consumption_kw": reading.consumption_kw,
+            "synced_at": reading.synced_at,
+        }
+        for reading in readings
+    ]
+
+
 def load_day_data(
-    connection: sqlite3.Connection,
+    session: DbSession,
     plant_code: str,
     day: date,
     tz: ZoneInfo,
@@ -93,8 +108,8 @@ def load_day_data(
 
     Parameters
     ----------
-    connection : sqlite3.Connection
-        Open SQLite connection.
+    session : DbSession
+        Open SQLAlchemy session.
     plant_code : str
         FusionSolar plant code.
     day : date
@@ -111,10 +126,10 @@ def load_day_data(
     day_start = datetime(day.year, day.month, day.day, tzinfo=tz)
     day_end = day_start + timedelta(days=1)
     readings = list_plant_power_readings(
-        connection,
+        session,
         plant_code=plant_code,
-        collected_from=day_start.isoformat(),
-        collected_to=day_end.isoformat(),
+        collected_from=day_start,
+        collected_to=day_end,
     )
     if not readings:
         return pd.DataFrame(
@@ -130,10 +145,8 @@ def load_day_data(
             ]
         )
 
-    df = pd.DataFrame(readings)
-    df["collected_at"] = pd.to_datetime(df["collected_at"], utc=True).dt.tz_convert(
-        tz
-    )
+    df = pd.DataFrame(_plant_reading_rows(readings))
+    df["collected_at"] = df["collected_at"].dt.tz_convert(tz)
     df["self_consumed_kw"] = df["pv_production_kw"] - df["grid_export_kw"]
     df["grid_import_kw"] = (df["consumption_kw"] - df["pv_production_kw"]).clip(
         lower=0

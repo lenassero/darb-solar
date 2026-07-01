@@ -1,96 +1,87 @@
-"""SQLite connection and schema initialization."""
+"""Postgres connection helpers for SQLAlchemy sessions."""
 
 from __future__ import annotations
 
 import os
-import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
-from darb_solar.db.schema import SCHEMA_SQL
+from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session, sessionmaker
+
+DbSession = Session
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_DATA_DIR = PROJECT_ROOT / "data"
-DEFAULT_DB_PATH = DEFAULT_DATA_DIR / "fusionsolar.db"
 DEFAULT_TIMEZONE_NAME = "Africa/Casablanca"
+DEFAULT_DATABASE_URL = (
+    "postgresql+psycopg://darb_solar:darb_solar@localhost:5432/darb_solar"
+)
+
+_engines: dict[str, Engine] = {}
+_session_factories: dict[str, sessionmaker[Session]] = {}
 
 
-def resolve_db_path(
-    db_path: Path | None = None,
-    *,
-    database_url: str | None = None,
-) -> Path:
-    """Resolve the SQLite database file path.
+def resolve_database_url(database_url: str | None = None) -> str:
+    """Resolve the Postgres database URL.
 
     Parameters
     ----------
-    db_path : Path or None, optional
-        Explicit database path. Takes precedence over ``database_url``.
     database_url : str or None, optional
-        Database URL from ``DARB_SOLAR_DATABASE_URL`` when ``db_path`` is
-        omitted.
+        Explicit database URL. When omitted, uses ``DARB_SOLAR_DATABASE_URL``
+        from the environment, then ``DEFAULT_DATABASE_URL``.
 
     Returns
     -------
-    Path
-        Path to the SQLite database file.
+    str
+        Postgres connection URL.
+    """
+    if database_url is not None:
+        return database_url
 
-    Raises
+    return os.environ.get("DARB_SOLAR_DATABASE_URL", DEFAULT_DATABASE_URL)
+
+
+def get_engine(database_url: str | None = None) -> Engine:
+    """Return a cached SQLAlchemy engine for the resolved database URL.
+
+    Parameters
+    ----------
+    database_url : str or None, optional
+        Postgres connection URL. Defaults to ``resolve_database_url()``.
+
+    Returns
+    -------
+    sqlalchemy.engine.Engine
+        Engine connected via the psycopg3 dialect.
+    """
+    url = resolve_database_url(database_url)
+    if url not in _engines:
+        _engines[url] = create_engine(url)
+        _session_factories[url] = sessionmaker(bind=_engines[url])
+    return _engines[url]
+
+
+def _get_session_factory(database_url: str | None = None) -> sessionmaker[Session]:
+    url = resolve_database_url(database_url)
+    get_engine(database_url)
+    return _session_factories[url]
+
+
+@contextmanager
+def get_session(database_url: str | None = None) -> Iterator[Session]:
+    """Yield a SQLAlchemy session with automatic commit or rollback.
+
+    Parameters
+    ----------
+    database_url : str or None, optional
+        Postgres connection URL. Defaults to ``resolve_database_url()``.
+
+    Yields
     ------
-    ValueError
-        If the URL scheme is not ``sqlite``.
+    sqlalchemy.orm.Session
+        Open database session.
     """
-    if db_path is not None:
-        return db_path.resolve()
-
-    url = database_url if database_url is not None else os.environ.get(
-        "DARB_SOLAR_DATABASE_URL"
-    )
-    if not url:
-        return DEFAULT_DB_PATH.resolve()
-
-    if not url.startswith("sqlite:///"):
-        msg = (
-            "Only sqlite:/// URLs are supported for now; "
-            f"got {url!r}."
-        )
-        raise ValueError(msg)
-
-    raw_path = url.removeprefix("sqlite:///")
-    path = Path(raw_path)
-    if not path.is_absolute():
-        path = (PROJECT_ROOT / path).resolve()
-    return path
-
-
-def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
-    """Open a SQLite connection and ensure the schema exists.
-
-    Parameters
-    ----------
-    db_path : Path or None, optional
-        Path to the SQLite database file. Defaults to
-        ``resolve_db_path()``.
-
-    Returns
-    -------
-    sqlite3.Connection
-        Connection with ``row_factory`` set to ``sqlite3.Row``.
-    """
-    resolved_path = resolve_db_path(db_path)
-    resolved_path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(resolved_path)
-    connection.row_factory = sqlite3.Row
-    init_db(connection)
-    return connection
-
-
-def init_db(connection: sqlite3.Connection) -> None:
-    """Create tables and indexes if they do not already exist.
-
-    Parameters
-    ----------
-    connection : sqlite3.Connection
-        Open SQLite connection.
-    """
-    connection.executescript(SCHEMA_SQL)
-    connection.commit()
+    with _get_session_factory(database_url).begin() as session:
+        yield session

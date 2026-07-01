@@ -2,22 +2,21 @@
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timedelta
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from loguru import logger
 
 from darb_solar.db import (
+    DbSession,
     Device,
     Plant,
-    get_connection,
     get_latest_collected_at,
+    get_session,
     list_device_power_readings,
     upsert_device_power_reading,
     upsert_plant_power_reading,
-    utc_now_iso,
+    utc_now,
 )
 from darb_solar.history_sync.api import _fetch_device_history
 from darb_solar.history_sync.session import FusionSolarSession, login_fusionsolar
@@ -39,7 +38,7 @@ _MIN_SYNC_GAP = timedelta(minutes=5)
 
 
 def _intraday_bounds(
-    connection: sqlite3.Connection,
+    session: DbSession,
     device: Device,
     *,
     now: datetime,
@@ -50,16 +49,15 @@ def _intraday_bounds(
     midnight today in ``now``'s timezone. ``end_dt`` is ``now``.
     """
     start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    latest_collected_at = get_latest_collected_at(connection, device["dev_id"])
+    latest_collected_at = get_latest_collected_at(session, device.dev_id)
     if latest_collected_at is None:
         return start_of_today, now
-    latest_dt = datetime.fromisoformat(latest_collected_at)
-    return max(latest_dt, start_of_today), now
+    return max(latest_collected_at, start_of_today), now
 
 
 def sync_device_intraday(
-    session: FusionSolarSession,
-    connection: sqlite3.Connection,
+    fusionsolar_session: FusionSolarSession,
+    session: DbSession,
     device: Device,
     *,
     tz: ZoneInfo,
@@ -73,10 +71,10 @@ def sync_device_intraday(
 
     Parameters
     ----------
-    session : FusionSolarSession
+    fusionsolar_session : FusionSolarSession
         Authenticated FusionSolar session.
-    connection : sqlite3.Connection
-        Open SQLite connection.
+    session : DbSession
+        Open SQLAlchemy session.
     device : Device
         Device metadata loaded from the database.
     tz : ZoneInfo
@@ -93,7 +91,7 @@ def sync_device_intraday(
     DeviceSyncResult
         Number of readings upserted and the per-device outcome.
     """
-    dev_id = device["dev_id"]
+    dev_id = device.dev_id
 
     if end_dt - start_dt < min_gap:
         logger.info(
@@ -107,54 +105,54 @@ def sync_device_intraday(
 
     try:
         records = _fetch_device_history(
-            session,
+            fusionsolar_session,
             device,
             start_ms=start_ms,
             end_ms=end_ms,
         )
-        synced_at = utc_now_iso()
+        synced_at = utc_now()
         readings = history_records_to_readings(
             records,
             dev_id=dev_id,
-            dev_type_id=device["dev_type_id"],
+            dev_type_id=device.dev_type_id,
             synced_at=synced_at,
             tz=tz,
         )
         for reading in readings:
-            upsert_device_power_reading(connection, reading)
-        connection.commit()
+            upsert_device_power_reading(session, reading)
+        session.commit()
         logger.info(
             f"Intraday synced dev_id={dev_id}: {len(readings)} reading(s)"
         )
         return DeviceSyncResult(len(readings), SyncRunOutcome.DONE)
     except Exception as exc:
-        connection.rollback()
+        session.rollback()
         logger.error(f"Intraday sync failed dev_id={dev_id}: {exc}")
         return DeviceSyncResult(0, SyncRunOutcome.FAILED)
 
 
 def sync_plant_intraday(
-    connection: sqlite3.Connection,
+    session: DbSession,
     *,
     plant: Plant,
     devices: list[Device],
-    collected_from: str,
-    collected_to: str,
+    collected_from: datetime,
+    collected_to: datetime,
 ) -> int:
     """Derive and persist plant metrics for a half-open intraday range.
 
     Parameters
     ----------
-    connection : sqlite3.Connection
-        Open SQLite connection.
+    session : DbSession
+        Open SQLAlchemy session.
     plant : Plant
         Plant metadata loaded from the database.
     devices : list[Device]
         Devices registered for the plant.
-    collected_from : str
-        Inclusive lower bound as an ISO-8601 timestamp.
-    collected_to : str
-        Exclusive upper bound as an ISO-8601 timestamp.
+    collected_from : datetime
+        Inclusive lower bound.
+    collected_to : datetime
+        Exclusive upper bound.
 
     Returns
     -------
@@ -164,27 +162,27 @@ def sync_plant_intraday(
     inverter = _device_by_role(devices, "inverter")
     meter = _device_by_role(devices, "meter")
     inverter_readings = list_device_power_readings(
-        connection,
-        dev_id=inverter["dev_id"],
+        session,
+        dev_id=inverter.dev_id,
         collected_from=collected_from,
         collected_to=collected_to,
     )
     meter_readings = list_device_power_readings(
-        connection,
-        dev_id=meter["dev_id"],
+        session,
+        dev_id=meter.dev_id,
         collected_from=collected_from,
         collected_to=collected_to,
     )
-    synced_at = utc_now_iso()
+    synced_at = utc_now()
     plant_readings = derive_plant_power_readings(
-        plant_code=plant["plant_code"],
+        plant_code=plant.plant_code,
         inverter_readings=inverter_readings,
         meter_readings=meter_readings,
         synced_at=synced_at,
     )
     for reading in plant_readings:
-        upsert_plant_power_reading(connection, reading)
-    connection.commit()
+        upsert_plant_power_reading(session, reading)
+    session.commit()
     logger.info(
         f"Intraday derived plant metrics: {len(plant_readings)} reading(s)"
     )
@@ -192,21 +190,21 @@ def sync_plant_intraday(
 
 
 def sync_intraday_devices(
-    session: FusionSolarSession,
-    connection: sqlite3.Connection,
+    fusionsolar_session: FusionSolarSession,
+    session: DbSession,
     *,
     plant: Plant,
     devices: list[Device],
     min_gap: timedelta = _MIN_SYNC_GAP,
-) -> tuple[list[DeviceSyncResult], str, str]:
+) -> tuple[list[DeviceSyncResult], datetime, datetime]:
     """Incrementally sync all devices and return per-device results.
 
     Parameters
     ----------
-    session : FusionSolarSession
+    fusionsolar_session : FusionSolarSession
         Authenticated FusionSolar session.
-    connection : sqlite3.Connection
-        Open SQLite connection.
+    session : DbSession
+        Open SQLAlchemy session.
     plant : Plant
         Plant metadata loaded from the database.
     devices : list[Device]
@@ -216,7 +214,7 @@ def sync_intraday_devices(
 
     Returns
     -------
-    tuple[list[DeviceSyncResult], str, str]
+    tuple[list[DeviceSyncResult], datetime, datetime]
         Per-device outcomes plus ``(collected_from, collected_to)`` bounds
         for plant derivation: earliest per-device ``start_dt`` from
         ``_intraday_bounds`` through ``now``.
@@ -227,13 +225,13 @@ def sync_intraday_devices(
     device_results: list[DeviceSyncResult] = []
 
     for device in devices:
-        start_dt, end_dt = _intraday_bounds(connection, device, now=now)
+        start_dt, end_dt = _intraday_bounds(session, device, now=now)
         if earliest_start is None or start_dt < earliest_start:
             earliest_start = start_dt
         device_results.append(
             sync_device_intraday(
+                fusionsolar_session,
                 session,
-                connection,
                 device,
                 tz=tz,
                 start_dt=start_dt,
@@ -246,14 +244,14 @@ def sync_intraday_devices(
         earliest_start = now.replace(
             hour=0, minute=0, second=0, microsecond=0
         )
-    return device_results, earliest_start.isoformat(), now.isoformat()
+    return device_results, earliest_start, now
 
 
 def sync_intraday(
     *,
     plant_code: str,
-    db_path: Path | None = None,
-    session: FusionSolarSession | None = None,
+    database_url: str | None = None,
+    fusionsolar_session: FusionSolarSession | None = None,
     min_gap: timedelta = _MIN_SYNC_GAP,
 ) -> SyncRunResult:
     """Login, load DB config, and incrementally sync today for a plant.
@@ -265,9 +263,9 @@ def sync_intraday(
     ----------
     plant_code : str
         FusionSolar plant code stored in the ``plants`` table.
-    db_path : Path or None, optional
-        SQLite database path.
-    session : FusionSolarSession or None, optional
+    database_url : str or None, optional
+        Postgres connection URL.
+    fusionsolar_session : FusionSolarSession or None, optional
         Existing authenticated session. When omitted, a new login is performed.
     min_gap : timedelta, optional
         Skip a device when ``now - start`` is shorter than this interval.
@@ -277,10 +275,10 @@ def sync_intraday(
     SyncRunResult
         Counters summarizing the run.
     """
-    active_session = session or login_fusionsolar()
+    active_fusionsolar_session = fusionsolar_session or login_fusionsolar()
 
-    with get_connection(db_path) as connection:
-        plant, devices = load_plant_config(connection, plant_code)
+    with get_session(database_url) as session:
+        plant, devices = load_plant_config(session, plant_code)
 
         logger.info(
             f"Intraday sync for plant {plant_code} "
@@ -288,8 +286,8 @@ def sync_intraday(
         )
 
         device_results, collected_from, collected_to = sync_intraday_devices(
-            active_session,
-            connection,
+            active_fusionsolar_session,
+            session,
             plant=plant,
             devices=devices,
             min_gap=min_gap,
@@ -313,7 +311,7 @@ def sync_intraday(
         plant_readings_upserted = 0
         if synced > 0:
             plant_readings_upserted = sync_plant_intraday(
-                connection,
+                session,
                 plant=plant,
                 devices=devices,
                 collected_from=collected_from,

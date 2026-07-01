@@ -1,29 +1,31 @@
-"""Read queries for FusionSolar SQLite data."""
+"""Read queries for FusionSolar Postgres data."""
 
 from __future__ import annotations
 
-import sqlite3
+from datetime import datetime
 
-from darb_solar.db.types import (
+from sqlalchemy import func, select
+
+from darb_solar.db.connection import DbSession
+from darb_solar.db.models import (
     Device,
     DevicePowerReading,
     Plant,
     PlantPowerReading,
     SyncWindow,
-    row_as,
 )
 
 
 def get_plant(
-    connection: sqlite3.Connection,
+    session: DbSession,
     plant_code: str,
 ) -> Plant | None:
     """Return a plant row by ``plant_code``, or ``None`` if missing.
 
     Parameters
     ----------
-    connection : sqlite3.Connection
-        Open SQLite connection.
+    session : DbSession
+        Open SQLAlchemy session.
     plant_code : str
         FusionSolar plant code, for example ``NE=182468888``.
 
@@ -32,21 +34,13 @@ def get_plant(
     Plant or None
         Plant metadata when present.
     """
-    row = connection.execute(
-        """
-        SELECT plant_code, plant_name, timezone
-        FROM plants
-        WHERE plant_code = ?
-        """,
-        (plant_code,),
-    ).fetchone()
-    if row is None:
-        return None
-    return row_as(row, Plant)
+    return session.scalar(
+        select(Plant).where(Plant.plant_code == plant_code)
+    )
 
 
 def list_devices(
-    connection: sqlite3.Connection,
+    session: DbSession,
     *,
     plant_code: str,
 ) -> list[Device]:
@@ -54,8 +48,8 @@ def list_devices(
 
     Parameters
     ----------
-    connection : sqlite3.Connection
-        Open SQLite connection.
+    session : DbSession
+        Open SQLAlchemy session.
     plant_code : str
         FusionSolar plant code.
 
@@ -64,201 +58,177 @@ def list_devices(
     list[Device]
         Devices ordered by ``role`` then ``dev_id``.
     """
-    rows = connection.execute(
-        """
-        SELECT dev_id, plant_code, dev_dn, dev_type_id, role
-        FROM devices
-        WHERE plant_code = ?
-        ORDER BY role, dev_id
-        """,
-        (plant_code,),
-    ).fetchall()
-    return [row_as(row, Device) for row in rows]
+    return list(
+        session.scalars(
+            select(Device)
+            .where(Device.plant_code == plant_code)
+            .order_by(Device.role, Device.dev_id)
+        )
+    )
 
 
 def get_sync_window(
-    connection: sqlite3.Connection,
+    session: DbSession,
     dev_id: str,
-    window_start: str,
+    window_start: datetime,
 ) -> SyncWindow | None:
     """Return a sync-window checkpoint row when it exists.
 
     Parameters
     ----------
-    connection : sqlite3.Connection
-        Open SQLite connection.
+    session : DbSession
+        Open SQLAlchemy session.
     dev_id : str
         FusionSolar device ID.
-    window_start : str
-        Inclusive window start as an ISO-8601 string.
+    window_start : datetime
+        Inclusive window start timestamp.
 
     Returns
     -------
     SyncWindow or None
         Checkpoint row when present.
     """
-    row = connection.execute(
-        """
-        SELECT dev_id, window_start, window_end, status, error_message, updated_at
-        FROM sync_windows
-        WHERE dev_id = ? AND window_start = ?
-        """,
-        (dev_id, window_start),
-    ).fetchone()
-    if row is None:
-        return None
-    return row_as(row, SyncWindow)
+    return session.scalar(
+        select(SyncWindow).where(
+            SyncWindow.dev_id == dev_id,
+            SyncWindow.window_start == window_start,
+        )
+    )
 
 
 def get_latest_collected_at(
-    connection: sqlite3.Connection,
+    session: DbSession,
     dev_id: str,
-) -> str | None:
+) -> datetime | None:
     """Return the most recent ``collected_at`` for a device, if any.
 
     Parameters
     ----------
-    connection : sqlite3.Connection
-        Open SQLite connection.
+    session : DbSession
+        Open SQLAlchemy session.
     dev_id : str
         FusionSolar device ID.
 
     Returns
     -------
-    str or None
-        Latest ``collected_at`` ISO-8601 timestamp, or ``None`` when the
-        device has no readings.
+    datetime or None
+        Latest ``collected_at`` timestamp, or ``None`` when the device has no
+        readings.
     """
-    row = connection.execute(
-        """
-        SELECT collected_at
-        FROM device_power_readings
-        WHERE dev_id = ?
-        ORDER BY collected_at DESC
-        LIMIT 1
-        """,
-        (dev_id,),
-    ).fetchone()
-    if row is None:
-        return None
-    return row[0]
+    return session.scalar(
+        select(DevicePowerReading.collected_at)
+        .where(DevicePowerReading.dev_id == dev_id)
+        .order_by(DevicePowerReading.collected_at.desc())
+        .limit(1)
+    )
 
 
 def get_latest_plant_synced_at(
-    connection: sqlite3.Connection,
+    session: DbSession,
     *,
     plant_code: str,
-    collected_from: str,
-    collected_to: str,
-) -> str | None:
+    collected_from: datetime,
+    collected_to: datetime,
+) -> datetime | None:
     """Return the latest ``synced_at`` for plant readings in a time range.
 
     Parameters
     ----------
-    connection : sqlite3.Connection
-        Open SQLite connection.
+    session : DbSession
+        Open SQLAlchemy session.
     plant_code : str
         FusionSolar plant code.
-    collected_from : str
-        Inclusive lower bound on ``collected_at`` as an ISO-8601 timestamp.
-    collected_to : str
-        Exclusive upper bound on ``collected_at`` as an ISO-8601 timestamp.
+    collected_from : datetime
+        Inclusive lower bound on ``collected_at``.
+    collected_to : datetime
+        Exclusive upper bound on ``collected_at``.
 
     Returns
     -------
-    str or None
-        Latest ``synced_at`` ISO-8601 timestamp in the range, or ``None`` when
-        no plant readings exist.
+    datetime or None
+        Latest ``synced_at`` timestamp in the range, or ``None`` when no plant
+        readings exist.
     """
-    row = connection.execute(
-        """
-        SELECT MAX(synced_at)
-        FROM plant_power_readings
-        WHERE plant_code = ?
-          AND collected_at >= ?
-          AND collected_at < ?
-        """,
-        (plant_code, collected_from, collected_to),
-    ).fetchone()
-    if row is None or row[0] is None:
-        return None
-    return row[0]
+    return session.scalar(
+        select(func.max(PlantPowerReading.synced_at)).where(
+            PlantPowerReading.plant_code == plant_code,
+            PlantPowerReading.collected_at >= collected_from,
+            PlantPowerReading.collected_at < collected_to,
+        )
+    )
 
 
 def list_device_power_readings(
-    connection: sqlite3.Connection,
+    session: DbSession,
     *,
     dev_id: str,
-    collected_from: str,
-    collected_to: str,
+    collected_from: datetime,
+    collected_to: datetime,
 ) -> list[DevicePowerReading]:
     """Return device readings within a half-open ``[collected_from, collected_to)`` range.
 
     Parameters
     ----------
-    connection : sqlite3.Connection
-        Open SQLite connection.
+    session : DbSession
+        Open SQLAlchemy session.
     dev_id : str
         FusionSolar device ID.
-    collected_from : str
-        Inclusive lower bound as an ISO-8601 timestamp.
-    collected_to : str
-        Exclusive upper bound as an ISO-8601 timestamp.
+    collected_from : datetime
+        Inclusive lower bound.
+    collected_to : datetime
+        Exclusive upper bound.
 
     Returns
     -------
     list[DevicePowerReading]
         Readings ordered by ``collected_at``.
     """
-    rows = connection.execute(
-        """
-        SELECT dev_id, collected_at, active_power_kw, synced_at
-        FROM device_power_readings
-        WHERE dev_id = ?
-          AND collected_at >= ?
-          AND collected_at < ?
-        ORDER BY collected_at
-        """,
-        (dev_id, collected_from, collected_to),
-    ).fetchall()
-    return [row_as(row, DevicePowerReading) for row in rows]
+    return list(
+        session.scalars(
+            select(DevicePowerReading)
+            .where(
+                DevicePowerReading.dev_id == dev_id,
+                DevicePowerReading.collected_at >= collected_from,
+                DevicePowerReading.collected_at < collected_to,
+            )
+            .order_by(DevicePowerReading.collected_at)
+        )
+    )
 
 
 def list_plant_power_readings(
-    connection: sqlite3.Connection,
+    session: DbSession,
     *,
     plant_code: str,
-    collected_from: str,
-    collected_to: str,
+    collected_from: datetime,
+    collected_to: datetime,
 ) -> list[PlantPowerReading]:
     """Return plant readings within a half-open ``[collected_from, collected_to)`` range.
 
     Parameters
     ----------
-    connection : sqlite3.Connection
-        Open SQLite connection.
+    session : DbSession
+        Open SQLAlchemy session.
     plant_code : str
         FusionSolar plant code.
-    collected_from : str
-        Inclusive lower bound as an ISO-8601 timestamp.
-    collected_to : str
-        Exclusive upper bound as an ISO-8601 timestamp.
+    collected_from : datetime
+        Inclusive lower bound.
+    collected_to : datetime
+        Exclusive upper bound.
 
     Returns
     -------
     list[PlantPowerReading]
         Readings ordered by ``collected_at``.
     """
-    rows = connection.execute(
-        """
-        SELECT plant_code, collected_at, pv_production_kw,
-               grid_export_kw, consumption_kw, synced_at
-        FROM plant_power_readings
-        WHERE plant_code = ?
-          AND collected_at >= ?
-          AND collected_at < ?
-        ORDER BY collected_at
-        """,
-        (plant_code, collected_from, collected_to),
-    ).fetchall()
-    return [row_as(row, PlantPowerReading) for row in rows]
+    return list(
+        session.scalars(
+            select(PlantPowerReading)
+            .where(
+                PlantPowerReading.plant_code == plant_code,
+                PlantPowerReading.collected_at >= collected_from,
+                PlantPowerReading.collected_at < collected_to,
+            )
+            .order_by(PlantPowerReading.collected_at)
+        )
+    )

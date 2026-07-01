@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import sqlite3
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -11,11 +10,12 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from darb_solar.db import (
+    DbSession,
     PROJECT_ROOT,
-    get_connection,
     get_latest_plant_synced_at,
     get_plant,
-    resolve_db_path,
+    get_session,
+    resolve_database_url,
 )
 from darb_solar.viz.daily import (
     build_daily_chart,
@@ -82,20 +82,19 @@ def _day_bounds(day: date, tz: ZoneInfo) -> tuple[datetime, datetime]:
     return day_start, day_start + timedelta(days=1)
 
 
-def _format_last_updated(synced_at: str | None, tz: ZoneInfo) -> str:
+def _format_last_updated(synced_at: datetime | None, tz: ZoneInfo) -> str:
     # synced_at is stored as UTC by the sync CLI; show it in plant-local time.
     if synced_at is None:
         return "aucune donnée synchronisée"
-    dt = datetime.fromisoformat(synced_at)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=ZoneInfo("UTC"))
-    local = dt.astimezone(tz)
+    if synced_at.tzinfo is None:
+        synced_at = synced_at.replace(tzinfo=ZoneInfo("UTC"))
+    local = synced_at.astimezone(tz)
     return local.strftime("%d/%m/%Y à %H:%M")
 
 
 def _render_date_header(
     *,
-    connection: sqlite3.Connection,
+    session: DbSession,
     plant_code: str,
     tz: ZoneInfo,
 ) -> date:
@@ -124,10 +123,10 @@ def _render_date_header(
     selected_date = st.session_state.selected_date
     day_start, day_end = _day_bounds(selected_date, tz)
     synced_at = get_latest_plant_synced_at(
-        connection,
+        session,
         plant_code=plant_code,
-        collected_from=day_start.isoformat(),
-        collected_to=day_end.isoformat(),
+        collected_from=day_start,
+        collected_to=day_end,
     )
     updated_label = _format_last_updated(synced_at, tz)
     with date_col:
@@ -148,10 +147,9 @@ def main() -> None:
         st.error("Set DARB_SOLAR_PLANT_CODE in the environment or .env file.")
         return
 
-    db_path = resolve_db_path()
-    connection = get_connection(db_path)
-    try:
-        plant = get_plant(connection, plant_code)
+    database_url = resolve_database_url()
+    with get_session(database_url) as session:
+        plant = get_plant(session, plant_code)
         if plant is None:
             st.error(
                 f"Plant {plant_code!r} is not in the database. "
@@ -159,14 +157,14 @@ def main() -> None:
             )
             return
 
-        tz = ZoneInfo(plant["timezone"])
+        tz = ZoneInfo(plant.timezone)
         selected_date = _render_date_header(
-            connection=connection,
+            session=session,
             plant_code=plant_code,
             tz=tz,
         )
 
-        df = load_day_data(connection, plant_code, selected_date, tz)
+        df = load_day_data(session, plant_code, selected_date, tz)
         if df.empty:
             st.info("No data for this date.")
             return
@@ -180,10 +178,6 @@ def main() -> None:
             use_container_width=True,
             config={"scrollZoom": True},
         )
-
-
-    finally:
-        connection.close()
 
 
 if __name__ == "__main__":

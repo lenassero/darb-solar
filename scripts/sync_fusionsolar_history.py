@@ -1,4 +1,4 @@
-"""CLI to backfill FusionSolar device history into a local SQLite database."""
+"""CLI to backfill FusionSolar device history into Postgres."""
 
 from __future__ import annotations
 
@@ -6,12 +6,11 @@ import argparse
 import os
 import sys
 from datetime import date, datetime, timedelta
-from pathlib import Path
 
 from dotenv import load_dotenv
 from loguru import logger
 
-from darb_solar.db import PROJECT_ROOT, resolve_db_path
+from darb_solar.db import PROJECT_ROOT, resolve_database_url
 from darb_solar.time import DEFAULT_TIMEZONE
 from darb_solar.history_sync import sync_history
 
@@ -61,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the command-line argument parser."""
     parser = argparse.ArgumentParser(
         description=(
-            "Sync FusionSolar device history into a local SQLite database."
+            "Sync FusionSolar device history into a Postgres database."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -92,13 +91,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--database-url",
         default=None,
-        help="SQLite database URL (sqlite:///...).",
-    )
-    parser.add_argument(
-        "--db-path",
-        type=Path,
-        default=None,
-        help="Path to the SQLite database file (overrides --database-url).",
+        help=(
+            "Override DARB_SOLAR_DATABASE_URL for this run "
+            "(postgresql+psycopg://...)."
+        ),
     )
     return parser
 
@@ -119,14 +115,7 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv(PROJECT_ROOT / ".env")
     args = build_parser().parse_args(argv)
 
-    try:
-        db_path = resolve_db_path(
-            args.db_path,
-            database_url=args.database_url,
-        )
-    except ValueError as exc:
-        logger.error(f"{exc}")
-        return 1
+    database_url = resolve_database_url(args.database_url)
 
     if args.from_date is not None and args.to_date is not None:
         if args.from_date > args.to_date:
@@ -136,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 1
 
-    logger.info(f"Using database at {db_path}")
+    logger.info(f"Using database at {database_url}")
 
     try:
         result = sync_history(
@@ -144,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
             from_date=args.from_date,
             to_date=args.to_date,
             resume=args.resume,
-            db_path=db_path,
+            database_url=database_url,
         )
     except ValueError as exc:
         logger.error(f"{exc}")

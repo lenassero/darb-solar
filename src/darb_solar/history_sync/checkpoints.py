@@ -6,47 +6,48 @@ Reads and writes ``SyncWindowCheckpointStatus`` in ``sync_windows``. Run-level
 
 from __future__ import annotations
 
-import sqlite3
+from datetime import datetime
 
 from darb_solar.db import (
+    DbSession,
     SyncWindow,
     SyncWindowCheckpointStatus,
     get_sync_window,
     upsert_sync_window,
-    utc_now_iso,
+    utc_now,
 )
 
 
 def should_skip_window(
-    connection: sqlite3.Connection,
+    session: DbSession,
     *,
     dev_id: str,
-    window_start: str,
+    window_start: datetime,
     resume: bool,
 ) -> bool:
     if not resume:
         return False
-    window = get_sync_window(connection, dev_id, window_start)
-    return window is not None and window["status"] == SyncWindowCheckpointStatus.DONE
+    window = get_sync_window(session, dev_id, window_start)
+    return window is not None and window.status == SyncWindowCheckpointStatus.DONE
 
 
 def persist_sync_window(
-    connection: sqlite3.Connection,
+    session: DbSession,
     *,
     dev_id: str,
-    window_start: str,
-    window_end: str,
+    window_start: datetime,
+    window_end: datetime,
     status: SyncWindowCheckpointStatus,
     error_message: str | None,
 ) -> None:
     upsert_sync_window(
-        connection,
+        session,
         SyncWindow(
             dev_id=dev_id,
             window_start=window_start,
             window_end=window_end,
             status=status,
             error_message=error_message,
-            updated_at=utc_now_iso(),
+            updated_at=utc_now(),
         ),
     )

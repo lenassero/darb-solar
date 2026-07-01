@@ -1,14 +1,22 @@
-"""SQLite storage for FusionSolar historical data."""
+"""SQLAlchemy-backed Postgres storage for FusionSolar historical data."""
 
 from darb_solar.db.connection import (
-    DEFAULT_DATA_DIR,
-    DEFAULT_DB_PATH,
+    DEFAULT_DATABASE_URL,
     DEFAULT_TIMEZONE_NAME,
+    DbSession,
     PROJECT_ROOT,
-    get_connection,
-    init_db,
-    resolve_db_path,
+    get_engine,
+    get_session,
+    resolve_database_url,
 )
+from darb_solar.db.models import (
+    Device,
+    DevicePowerReading,
+    Plant,
+    PlantPowerReading,
+    SyncWindow,
+)
+from darb_solar.db.types import DeviceRole, SyncWindowCheckpointStatus
 from darb_solar.db.reads import (
     get_latest_collected_at,
     get_latest_plant_synced_at,
@@ -18,32 +26,17 @@ from darb_solar.db.reads import (
     list_devices,
     list_plant_power_readings,
 )
-from darb_solar.db.time import utc_now_iso
-from darb_solar.db.types import (
-    Device,
-    DevicePowerReading,
-    DeviceRole,
-    Plant,
-    PlantPowerReading,
-    SyncWindow,
-    SyncWindowCheckpointStatus,
-)
+from darb_solar.db.time import utc_now
 from darb_solar.db.writes import (
     upsert_device,
     upsert_device_power_reading,
-    upsert_device_power_readings,
-    upsert_devices,
     upsert_plant,
     upsert_plant_power_reading,
-    upsert_plant_power_readings,
-    upsert_plants,
     upsert_sync_window,
-    upsert_sync_windows,
 )
 
 __all__ = [
-    "DEFAULT_DATA_DIR",
-    "DEFAULT_DB_PATH",
+    "DEFAULT_DATABASE_URL",
     "DEFAULT_TIMEZONE_NAME",
     "PROJECT_ROOT",
     "Device",
@@ -53,25 +46,21 @@ __all__ = [
     "PlantPowerReading",
     "SyncWindow",
     "SyncWindowCheckpointStatus",
-    "get_connection",
+    "DbSession",
+    "get_engine",
+    "get_session",
     "get_latest_collected_at",
     "get_latest_plant_synced_at",
     "get_plant",
     "get_sync_window",
-    "init_db",
     "list_device_power_readings",
     "list_devices",
     "list_plant_power_readings",
-    "resolve_db_path",
+    "resolve_database_url",
     "upsert_device",
     "upsert_device_power_reading",
-    "upsert_device_power_readings",
-    "upsert_devices",
     "upsert_plant",
     "upsert_plant_power_reading",
-    "upsert_plant_power_readings",
-    "upsert_plants",
     "upsert_sync_window",
-    "upsert_sync_windows",
-    "utc_now_iso",
+    "utc_now",
 ]

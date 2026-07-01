@@ -57,8 +57,8 @@ def _fetch_device_history(
         try:
             session.ensure_logged_in()
             response = session.client.get_device_history(
-                device["dev_dn"],
-                device["dev_type_id"],
+                device.dev_dn,
+                device.dev_type_id,
                 start_ms,
                 end_ms,
             )
@@ -71,7 +71,7 @@ def _fetch_device_history(
                 raise
             backoff_seconds = _TRANSIENT_BACKOFF_SECONDS[transient_retry]
             logger.warning(
-                f"Transient network error for dev_id={device['dev_id']} "
+                f"Transient network error for dev_id={device.dev_id} "
                 f"retry {transient_retry + 1}/{max_transient_retries}: {exc}; "
                 f"retrying in {backoff_seconds:.0f}s"
             )

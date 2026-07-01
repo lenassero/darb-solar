@@ -1,16 +1,15 @@
-"""CLI to seed FusionSolar plant and device reference data into SQLite."""
+"""CLI to seed FusionSolar plant and device reference data into Postgres."""
 
 from __future__ import annotations
 
 import argparse
 import os
 import sys
-from pathlib import Path
 
 from dotenv import load_dotenv
 from loguru import logger
 
-from darb_solar.db import DEFAULT_TIMEZONE_NAME, PROJECT_ROOT, resolve_db_path
+from darb_solar.db import DEFAULT_TIMEZONE_NAME, PROJECT_ROOT, resolve_database_url
 from darb_solar.history_sync import bootstrap_plant
 
 
@@ -18,7 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the command-line argument parser."""
     parser = argparse.ArgumentParser(
         description=(
-            "Bootstrap FusionSolar plant and device metadata into SQLite."
+            "Bootstrap FusionSolar plant and device metadata into Postgres."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -36,13 +35,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--database-url",
         default=None,
-        help="SQLite database URL (sqlite:///...).",
-    )
-    parser.add_argument(
-        "--db-path",
-        type=Path,
-        default=None,
-        help="Path to the SQLite database file (overrides --database-url).",
+        help=(
+            "Override DARB_SOLAR_DATABASE_URL for this run "
+            "(postgresql+psycopg://...)."
+        ),
     )
     return parser
 
@@ -63,22 +59,15 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv(PROJECT_ROOT / ".env")
     args = build_parser().parse_args(argv)
 
-    try:
-        db_path = resolve_db_path(
-            args.db_path,
-            database_url=args.database_url,
-        )
-    except ValueError as exc:
-        logger.error(f"{exc}")
-        return 1
+    database_url = resolve_database_url(args.database_url)
 
-    logger.info(f"Using database at {db_path}")
+    logger.info(f"Using database at {database_url}")
 
     try:
         result = bootstrap_plant(
             plant_code=args.plant_code,
             timezone=args.timezone,
-            db_path=db_path,
+            database_url=database_url,
         )
     except ValueError as exc:
         logger.error(f"{exc}")

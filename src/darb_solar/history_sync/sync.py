@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import date, datetime, timedelta
-from pathlib import Path
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
@@ -12,14 +10,15 @@ from loguru import logger
 
 from darb_solar.db import (
     DEFAULT_TIMEZONE_NAME,
+    DbSession,
     Device,
     DevicePowerReading,
     DeviceRole,
     Plant,
     PlantPowerReading,
     SyncWindowCheckpointStatus,
-    get_connection,
     get_plant,
+    get_session,
     get_sync_window,
     list_device_power_readings,
     list_devices,
@@ -27,7 +26,7 @@ from darb_solar.db import (
     upsert_device_power_reading,
     upsert_plant,
     upsert_plant_power_reading,
-    utc_now_iso,
+    utc_now,
 )
 from darb_solar.fusionsolar import (
     FusionSolarClient,
@@ -111,8 +110,8 @@ def bootstrap_plant(
     *,
     plant_code: str,
     timezone: str = DEFAULT_TIMEZONE_NAME,
-    db_path: Path | None = None,
-    session: FusionSolarSession | None = None,
+    database_url: str | None = None,
+    fusionsolar_session: FusionSolarSession | None = None,
 ) -> BootstrapResult:
     """Fetch plant metadata from FusionSolar and seed reference tables.
 
@@ -122,9 +121,9 @@ def bootstrap_plant(
         FusionSolar plant code to register.
     timezone : str, optional
         IANA timezone stored on the plant row.
-    db_path : Path or None, optional
-        SQLite database path.
-    session : FusionSolarSession or None, optional
+    database_url : str or None, optional
+        Postgres connection URL.
+    fusionsolar_session : FusionSolarSession or None, optional
         Existing authenticated session. When omitted, a new login is performed.
 
     Returns
@@ -137,9 +136,9 @@ def bootstrap_plant(
     ValueError
         If the plant or required devices cannot be resolved from the API.
     """
-    active_session = session or login_fusionsolar()
-    station = _fetch_station(active_session, plant_code)
-    api_devices = active_session.client.list_devices(plant_code)
+    active_fusionsolar_session = fusionsolar_session or login_fusionsolar()
+    station = _fetch_station(active_fusionsolar_session, plant_code)
+    api_devices = active_fusionsolar_session.client.list_devices(plant_code)
     inverter = _require_single_device(
         filter_inverters(api_devices),
         role="inverter",
@@ -159,30 +158,30 @@ def bootstrap_plant(
         _device_from_api(meter, plant_code=plant_code, role="meter"),
     ]
 
-    with get_connection(db_path) as connection:
-        upsert_plant(connection, plant)
+    with get_session(database_url) as session:
+        upsert_plant(session, plant)
         for device in devices:
-            upsert_device(connection, device)
-        connection.commit()
+            upsert_device(session, device)
+        session.commit()
 
     logger.info(
         f"Bootstrapped plant {plant_code}: "
-        f"inverter dev_id={devices[0]['dev_id']}, "
-        f"meter dev_id={devices[1]['dev_id']}"
+        f"inverter dev_id={devices[0].dev_id}, "
+        f"meter dev_id={devices[1].dev_id}"
     )
     return BootstrapResult(plant=plant, devices=devices)
 
 
 def load_plant_config(
-    connection: sqlite3.Connection,
+    session: DbSession,
     plant_code: str,
 ) -> tuple[Plant, list[Device]]:
     """Load static plant and device rows seeded in the database.
 
     Parameters
     ----------
-    connection : sqlite3.Connection
-        Open SQLite connection.
+    session : DbSession
+        Open SQLAlchemy session.
     plant_code : str
         FusionSolar plant code.
 
@@ -196,14 +195,14 @@ def load_plant_config(
     ValueError
         If the plant or its devices are missing from the database.
     """
-    plant = get_plant(connection, plant_code)
+    plant = get_plant(session, plant_code)
     if plant is None:
         raise ValueError(
             f"Plant {plant_code!r} is not in the database; "
             "run bootstrap before syncing history."
         )
 
-    devices = list_devices(connection, plant_code=plant_code)
+    devices = list_devices(session, plant_code=plant_code)
     if not devices:
         raise ValueError(
             f"No devices registered for plant {plant_code!r}; "
@@ -214,7 +213,7 @@ def load_plant_config(
 
 def plant_timezone(plant: Plant) -> ZoneInfo:
     """Return the plant timezone as a ``ZoneInfo`` object."""
-    return ZoneInfo(plant["timezone"])
+    return ZoneInfo(plant.timezone)
 
 
 def default_sync_end_date(*, tz: ZoneInfo = DEFAULT_TIMEZONE) -> date:
@@ -243,7 +242,7 @@ def iter_day_windows(
     Yields
     ------
     DayWindow
-        Day metadata with ISO window bounds and epoch milliseconds.
+        Day metadata with window bounds and epoch milliseconds.
     """
     if from_date > to_date:
         return
@@ -260,8 +259,8 @@ def iter_day_windows(
         start_ms, end_ms = day_bounds_epoch_ms(start_dt, tz=tz)
         yield DayWindow(
             day=current,
-            window_start=start_dt.isoformat(),
-            window_end=end_dt.isoformat(),
+            window_start=start_dt,
+            window_end=end_dt,
             start_ms=start_ms,
             end_ms=end_ms,
         )
@@ -273,7 +272,7 @@ def history_records_to_readings(
     *,
     dev_id: str,
     dev_type_id: int,
-    synced_at: str,
+    synced_at: datetime,
     tz: ZoneInfo,
 ) -> list[DevicePowerReading]:
     """Normalize historical API rows to device power readings in kW.
@@ -283,10 +282,10 @@ def history_records_to_readings(
     records : list[dict[str, Any]]
         Raw rows from ``get_device_history``.
     dev_id : str
-        Device primary key stored in SQLite.
+        Device primary key stored in the database.
     dev_type_id : int
         FusionSolar device type ID used for unit conversion.
-    synced_at : str
+    synced_at : datetime
         UTC ingest timestamp recorded on each row.
     tz : ZoneInfo
         Plant-local timezone for ``collected_at``.
@@ -307,7 +306,7 @@ def history_records_to_readings(
         readings.append(
             DevicePowerReading(
                 dev_id=dev_id,
-                collected_at=collected_at.isoformat(),
+                collected_at=collected_at,
                 active_power_kw=active_power_kw_from_history_record(
                     record, dev_type_id
                 ),
@@ -318,8 +317,8 @@ def history_records_to_readings(
 
 
 def sync_device_day_window(
-    session: FusionSolarSession,
-    connection: sqlite3.Connection,
+    fusionsolar_session: FusionSolarSession,
+    session: DbSession,
     device: Device,
     window: DayWindow,
     *,
@@ -330,10 +329,10 @@ def sync_device_day_window(
 
     Parameters
     ----------
-    session : FusionSolarSession
+    fusionsolar_session : FusionSolarSession
         Authenticated FusionSolar session.
-    connection : sqlite3.Connection
-        Open SQLite connection.
+    session : DbSession
+        Open SQLAlchemy session.
     device : Device
         Device metadata loaded from the database.
     window : DayWindow
@@ -348,9 +347,9 @@ def sync_device_day_window(
     DeviceSyncResult
         Number of readings upserted and the window sync outcome.
     """
-    dev_id = device["dev_id"]
+    dev_id = device.dev_id
     if should_skip_window(
-        connection,
+        session,
         dev_id=dev_id,
         window_start=window.window_start,
         resume=resume,
@@ -362,41 +361,41 @@ def sync_device_day_window(
         return DeviceSyncResult(0, SyncRunOutcome.SKIPPED)
 
     persist_sync_window(
-        connection,
+        session,
         dev_id=dev_id,
         window_start=window.window_start,
         window_end=window.window_end,
         status=SyncWindowCheckpointStatus.PENDING,
         error_message=None,
     )
-    connection.commit()
+    session.commit()
 
     try:
         records = _fetch_device_history(
-            session,
+            fusionsolar_session,
             device,
             start_ms=window.start_ms,
             end_ms=window.end_ms,
         )
-        synced_at = utc_now_iso()
+        synced_at = utc_now()
         readings = history_records_to_readings(
             records,
             dev_id=dev_id,
-            dev_type_id=device["dev_type_id"],
+            dev_type_id=device.dev_type_id,
             synced_at=synced_at,
             tz=tz,
         )
         for reading in readings:
-            upsert_device_power_reading(connection, reading)
+            upsert_device_power_reading(session, reading)
         persist_sync_window(
-            connection,
+            session,
             dev_id=dev_id,
             window_start=window.window_start,
             window_end=window.window_end,
             status=SyncWindowCheckpointStatus.DONE,
             error_message=None,
         )
-        connection.commit()
+        session.commit()
         logger.info(
             f"Synced dev_id={dev_id} day={window.day}: "
             f"{len(readings)} reading(s)"
@@ -404,14 +403,14 @@ def sync_device_day_window(
         return DeviceSyncResult(len(readings), SyncRunOutcome.DONE)
     except Exception as exc:
         persist_sync_window(
-            connection,
+            session,
             dev_id=dev_id,
             window_start=window.window_start,
             window_end=window.window_end,
             status=SyncWindowCheckpointStatus.FAILED,
             error_message=str(exc),
         )
-        connection.commit()
+        session.commit()
         logger.error(
             f"Failed dev_id={dev_id} day={window.day}: {exc}"
         )
@@ -438,7 +437,7 @@ def _device_by_role(devices: list[Device], role: str) -> Device:
     ValueError
         If no device or more than one device matches ``role``.
     """
-    matches = [device for device in devices if device["role"] == role]
+    matches = [device for device in devices if device.role == role]
     if len(matches) != 1:
         raise ValueError(
             f"Expected exactly one device with role {role!r}; "
@@ -448,14 +447,14 @@ def _device_by_role(devices: list[Device], role: str) -> Device:
 
 
 def _device_windows_complete(
-    connection: sqlite3.Connection,
+    session: DbSession,
     devices: list[Device],
-    window_start: str,
+    window_start: datetime,
 ) -> bool:
     """Return whether every device window is marked ``done``."""
     for device in devices:
-        window = get_sync_window(connection, device["dev_id"], window_start)
-        if window is None or window["status"] != SyncWindowCheckpointStatus.DONE:
+        window = get_sync_window(session, device.dev_id, window_start)
+        if window is None or window.status != SyncWindowCheckpointStatus.DONE:
             return False
     return True
 
@@ -465,7 +464,7 @@ def derive_plant_power_readings(
     plant_code: str,
     inverter_readings: list[DevicePowerReading],
     meter_readings: list[DevicePowerReading],
-    synced_at: str,
+    synced_at: datetime,
 ) -> list[PlantPowerReading]:
     """Inner-join inverter and meter readings and compute plant metrics.
 
@@ -477,7 +476,7 @@ def derive_plant_power_readings(
         Inverter rows for one calendar day.
     meter_readings : list[DevicePowerReading]
         Meter rows for the same day.
-    synced_at : str
+    synced_at : datetime
         UTC ingest timestamp recorded on each derived row.
 
     Returns
@@ -486,17 +485,17 @@ def derive_plant_power_readings(
         Derived rows for timestamps present on both devices.
     """
     meter_kw_by_time = {
-        reading["collected_at"]: reading["active_power_kw"]
+        reading.collected_at: reading.active_power_kw
         for reading in meter_readings
     }
     plant_readings: list[PlantPowerReading] = []
     for inverter_reading in inverter_readings:
-        collected_at = inverter_reading["collected_at"]
+        collected_at = inverter_reading.collected_at
         meter_kw = meter_kw_by_time.get(collected_at)
         if meter_kw is None:
             continue
         balance = FusionSolarClient.compute_energy_balance(
-            inverter_reading["active_power_kw"],
+            inverter_reading.active_power_kw,
             meter_kw,
         )
         plant_readings.append(
@@ -513,7 +512,7 @@ def derive_plant_power_readings(
 
 
 def sync_plant_day_window(
-    connection: sqlite3.Connection,
+    session: DbSession,
     *,
     plant: Plant,
     devices: list[Device],
@@ -523,8 +522,8 @@ def sync_plant_day_window(
 
     Parameters
     ----------
-    connection : sqlite3.Connection
-        Open SQLite connection.
+    session : DbSession
+        Open SQLAlchemy session.
     plant : Plant
         Plant metadata loaded from the database.
     devices : list[Device]
@@ -537,7 +536,7 @@ def sync_plant_day_window(
     int
         Number of plant rows upserted.
     """
-    if not _device_windows_complete(connection, devices, window.window_start):
+    if not _device_windows_complete(session, devices, window.window_start):
         logger.debug(
             f"Skipping plant metrics for day={window.day}: "
             "device windows incomplete"
@@ -547,27 +546,27 @@ def sync_plant_day_window(
     inverter = _device_by_role(devices, "inverter")
     meter = _device_by_role(devices, "meter")
     inverter_readings = list_device_power_readings(
-        connection,
-        dev_id=inverter["dev_id"],
+        session,
+        dev_id=inverter.dev_id,
         collected_from=window.window_start,
         collected_to=window.window_end,
     )
     meter_readings = list_device_power_readings(
-        connection,
-        dev_id=meter["dev_id"],
+        session,
+        dev_id=meter.dev_id,
         collected_from=window.window_start,
         collected_to=window.window_end,
     )
-    synced_at = utc_now_iso()
+    synced_at = utc_now()
     plant_readings = derive_plant_power_readings(
-        plant_code=plant["plant_code"],
+        plant_code=plant.plant_code,
         inverter_readings=inverter_readings,
         meter_readings=meter_readings,
         synced_at=synced_at,
     )
     for reading in plant_readings:
-        upsert_plant_power_reading(connection, reading)
-    connection.commit()
+        upsert_plant_power_reading(session, reading)
+    session.commit()
     logger.info(
         f"Derived plant metrics for day={window.day}: "
         f"{len(plant_readings)} reading(s)"
@@ -576,7 +575,7 @@ def sync_plant_day_window(
 
 
 def sync_plant_power_readings(
-    connection: sqlite3.Connection,
+    session: DbSession,
     *,
     plant: Plant,
     devices: list[Device],
@@ -587,8 +586,8 @@ def sync_plant_power_readings(
 
     Parameters
     ----------
-    connection : sqlite3.Connection
-        Open SQLite connection.
+    session : DbSession
+        Open SQLAlchemy session.
     plant : Plant
         Plant metadata loaded from the database.
     devices : list[Device]
@@ -610,11 +609,11 @@ def sync_plant_power_readings(
     plant_days_skipped = 0
 
     for window in windows:
-        if not _device_windows_complete(connection, devices, window.window_start):
+        if not _device_windows_complete(session, devices, window.window_start):
             plant_days_skipped += 1
             continue
         plant_readings_upserted += sync_plant_day_window(
-            connection,
+            session,
             plant=plant,
             devices=devices,
             window=window,
@@ -624,8 +623,8 @@ def sync_plant_power_readings(
 
 
 def sync_device_history(
-    session: FusionSolarSession,
-    connection: sqlite3.Connection,
+    fusionsolar_session: FusionSolarSession,
+    session: DbSession,
     *,
     plant: Plant,
     devices: list[Device],
@@ -637,10 +636,10 @@ def sync_device_history(
 
     Parameters
     ----------
-    session : FusionSolarSession
+    fusionsolar_session : FusionSolarSession
         Authenticated FusionSolar session.
-    connection : sqlite3.Connection
-        Open SQLite connection.
+    session : DbSession
+        Open SQLAlchemy session.
     plant : Plant
         Plant metadata loaded from the database.
     devices : list[Device]
@@ -677,8 +676,8 @@ def sync_device_history(
     for device in devices:
         for window in windows:
             result = sync_device_day_window(
+                fusionsolar_session,
                 session,
-                connection,
                 device,
                 window,
                 tz=tz,
@@ -694,7 +693,7 @@ def sync_device_history(
                     failed += 1
 
     plant_readings_upserted, plant_skipped = sync_plant_power_readings(
-        connection,
+        session,
         plant=plant,
         devices=devices,
         from_date=from_date,
@@ -717,8 +716,8 @@ def sync_history(
     from_date: date | None = None,
     to_date: date | None = None,
     resume: bool = True,
-    db_path: Path | None = None,
-    session: FusionSolarSession | None = None,
+    database_url: str | None = None,
+    fusionsolar_session: FusionSolarSession | None = None,
 ) -> SyncRunResult:
     """Login, load DB config, and sync device history for a plant.
 
@@ -732,9 +731,9 @@ def sync_history(
         Last calendar day to sync. Defaults to yesterday in the plant timezone.
     resume : bool, optional
         When ``True``, skip windows already marked ``done``.
-    db_path : Path or None, optional
-        SQLite database path.
-    session : FusionSolarSession or None, optional
+    database_url : str or None, optional
+        Postgres connection URL.
+    fusionsolar_session : FusionSolarSession or None, optional
         Existing authenticated session. When omitted, a new login is performed.
 
     Returns
@@ -743,10 +742,10 @@ def sync_history(
         Counters summarizing the run.
     """
     resolved_from_date = from_date or DEFAULT_BACKFILL_START
-    active_session = session or login_fusionsolar()
+    active_fusionsolar_session = fusionsolar_session or login_fusionsolar()
 
-    with get_connection(db_path) as connection:
-        plant, devices = load_plant_config(connection, plant_code)
+    with get_session(database_url) as session:
+        plant, devices = load_plant_config(session, plant_code)
         tz = plant_timezone(plant)
         resolved_to_date = to_date or default_sync_end_date(tz=tz)
 
@@ -761,8 +760,8 @@ def sync_history(
             f"to {resolved_to_date} for {len(devices)} device(s)"
         )
         return sync_device_history(
-            active_session,
-            connection,
+            active_fusionsolar_session,
+            session,
             plant=plant,
             devices=devices,
             from_date=resolved_from_date,
