@@ -368,7 +368,7 @@ def sync_device_day_window(
         status=SyncWindowCheckpointStatus.PENDING,
         error_message=None,
     )
-    session.commit()
+    session.flush()
 
     try:
         records = _fetch_device_history(
@@ -395,7 +395,7 @@ def sync_device_day_window(
             status=SyncWindowCheckpointStatus.DONE,
             error_message=None,
         )
-        session.commit()
+        session.flush()
         logger.info(
             f"Synced dev_id={dev_id} day={window.day}: "
             f"{len(readings)} reading(s)"
@@ -410,7 +410,7 @@ def sync_device_day_window(
             status=SyncWindowCheckpointStatus.FAILED,
             error_message=str(exc),
         )
-        session.commit()
+        session.flush()
         logger.error(
             f"Failed dev_id={dev_id} day={window.day}: {exc}"
         )

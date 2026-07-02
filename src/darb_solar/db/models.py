@@ -58,7 +58,12 @@ class Device(Base):
     dev_dn: Mapped[str] = mapped_column(Text, nullable=False)
     dev_type_id: Mapped[int] = mapped_column(Integer, nullable=False)
     role: Mapped[DeviceRole] = mapped_column(
-        Enum(DeviceRole, native_enum=False),
+        Enum(
+            DeviceRole,
+            native_enum=False,
+            # Persist enum `.value` strings (e.g. "inverter"), not member names.
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
         nullable=False,
     )
 
@@ -143,7 +148,12 @@ class SyncWindow(Base):
         nullable=False,
     )
     status: Mapped[SyncWindowCheckpointStatus] = mapped_column(
-        Enum(SyncWindowCheckpointStatus, native_enum=False),
+        Enum(
+            SyncWindowCheckpointStatus,
+            native_enum=False,
+            # Persist enum `.value` strings (e.g. "pending"), not member names.
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
         nullable=False,
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
