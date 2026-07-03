@@ -45,8 +45,8 @@ def _intraday_bounds(
 ) -> tuple[datetime, datetime]:
     """Return ``(start_dt, end_dt)`` for an intraday history fetch.
 
-    ``start_dt`` is the later of the device's latest stored reading and
-    midnight today in ``now``'s timezone. ``end_dt`` is ``now``.
+    ``start_dt`` is the later of the device's latest stored reading and midnight today
+    in ``now``'s timezone. ``end_dt`` is ``now``.
     """
     start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     latest_collected_at = get_latest_collected_at(session, device.dev_id)
@@ -103,32 +103,32 @@ def sync_device_intraday(
     start_ms = datetime_to_epoch_ms(start_dt)
     end_ms = datetime_to_epoch_ms(end_dt)
 
+    records = _fetch_device_history(
+        fusionsolar_session,
+        device,
+        start_ms=start_ms,
+        end_ms=end_ms,
+    )
+    synced_at = utc_now()
+    readings = history_records_to_readings(
+        records,
+        dev_id=dev_id,
+        dev_type_id=device.dev_type_id,
+        synced_at=synced_at,
+        tz=tz,
+    )
+
     try:
-        records = _fetch_device_history(
-            fusionsolar_session,
-            device,
-            start_ms=start_ms,
-            end_ms=end_ms,
-        )
-        synced_at = utc_now()
-        readings = history_records_to_readings(
-            records,
-            dev_id=dev_id,
-            dev_type_id=device.dev_type_id,
-            synced_at=synced_at,
-            tz=tz,
-        )
-        for reading in readings:
-            upsert_device_power_reading(session, reading)
-        session.commit()
-        logger.info(
-            f"Intraday synced dev_id={dev_id}: {len(readings)} reading(s)"
-        )
-        return DeviceSyncResult(len(readings), SyncRunOutcome.DONE)
+        # Savepoint rollback is automatic on any exception in this block.
+        with session.begin_nested():
+            for reading in readings:
+                upsert_device_power_reading(session, reading)
     except Exception as exc:
-        session.rollback()
         logger.error(f"Intraday sync failed dev_id={dev_id}: {exc}")
         return DeviceSyncResult(0, SyncRunOutcome.FAILED)
+
+    logger.info(f"Intraday synced dev_id={dev_id}: {len(readings)} reading(s)")
+    return DeviceSyncResult(len(readings), SyncRunOutcome.DONE)
 
 
 def sync_plant_intraday(
@@ -182,10 +182,7 @@ def sync_plant_intraday(
     )
     for reading in plant_readings:
         upsert_plant_power_reading(session, reading)
-    session.commit()
-    logger.info(
-        f"Intraday derived plant metrics: {len(plant_readings)} reading(s)"
-    )
+    logger.info(f"Intraday derived plant metrics: {len(plant_readings)} reading(s)")
     return len(plant_readings)
 
 
@@ -241,9 +238,7 @@ def sync_intraday_devices(
         )
 
     if earliest_start is None:
-        earliest_start = now.replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        earliest_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     return device_results, earliest_start, now
 
 
@@ -281,8 +276,7 @@ def sync_intraday(
         plant, devices = load_plant_config(session, plant_code)
 
         logger.info(
-            f"Intraday sync for plant {plant_code} "
-            f"across {len(devices)} device(s)"
+            f"Intraday sync for plant {plant_code} " f"across {len(devices)} device(s)"
         )
 
         device_results, collected_from, collected_to = sync_intraday_devices(

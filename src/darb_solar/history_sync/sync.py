@@ -30,23 +30,14 @@ from darb_solar.db import (
 )
 from darb_solar.fusionsolar import (
     FusionSolarClient,
+    active_power_kw_from_history_record,
     device_dn,
     device_type_id,
     filter_inverters,
     filter_meters,
-    active_power_kw_from_history_record,
 )
-from darb_solar.time import (
-    DEFAULT_TIMEZONE,
-    day_bounds_epoch_ms,
-    datetime_from_epoch_ms,
-)
-
 from darb_solar.history_sync.api import _fetch_device_history, _fetch_station
-from darb_solar.history_sync.checkpoints import (
-    persist_sync_window,
-    should_skip_window,
-)
+from darb_solar.history_sync.checkpoints import persist_sync_window, should_skip_window
 from darb_solar.history_sync.session import FusionSolarSession, login_fusionsolar
 from darb_solar.history_sync.types import (
     BootstrapResult,
@@ -54,6 +45,11 @@ from darb_solar.history_sync.types import (
     DeviceSyncResult,
     SyncRunOutcome,
     SyncRunResult,
+)
+from darb_solar.time import (
+    DEFAULT_TIMEZONE,
+    datetime_from_epoch_ms,
+    day_bounds_epoch_ms,
 )
 
 DEFAULT_BACKFILL_START = date(2026, 1, 1)
@@ -162,7 +158,6 @@ def bootstrap_plant(
         upsert_plant(session, plant)
         for device in devices:
             upsert_device(session, device)
-        session.commit()
 
     logger.info(
         f"Bootstrapped plant {plant_code}: "
@@ -355,8 +350,7 @@ def sync_device_day_window(
         resume=resume,
     ):
         logger.info(
-            f"Skipping dev_id={dev_id} day={window.day} "
-            "(checkpoint already done)"
+            f"Skipping dev_id={dev_id} day={window.day} " "(checkpoint already done)"
         )
         return DeviceSyncResult(0, SyncRunOutcome.SKIPPED)
 
@@ -397,8 +391,7 @@ def sync_device_day_window(
         )
         session.flush()
         logger.info(
-            f"Synced dev_id={dev_id} day={window.day}: "
-            f"{len(readings)} reading(s)"
+            f"Synced dev_id={dev_id} day={window.day}: " f"{len(readings)} reading(s)"
         )
         return DeviceSyncResult(len(readings), SyncRunOutcome.DONE)
     except Exception as exc:
@@ -411,9 +404,7 @@ def sync_device_day_window(
             error_message=str(exc),
         )
         session.flush()
-        logger.error(
-            f"Failed dev_id={dev_id} day={window.day}: {exc}"
-        )
+        logger.error(f"Failed dev_id={dev_id} day={window.day}: {exc}")
         return DeviceSyncResult(0, SyncRunOutcome.FAILED)
 
 
@@ -440,8 +431,7 @@ def _device_by_role(devices: list[Device], role: str) -> Device:
     matches = [device for device in devices if device.role == role]
     if len(matches) != 1:
         raise ValueError(
-            f"Expected exactly one device with role {role!r}; "
-            f"found {len(matches)}."
+            f"Expected exactly one device with role {role!r}; " f"found {len(matches)}."
         )
     return matches[0]
 
@@ -485,8 +475,7 @@ def derive_plant_power_readings(
         Derived rows for timestamps present on both devices.
     """
     meter_kw_by_time = {
-        reading.collected_at: reading.active_power_kw
-        for reading in meter_readings
+        reading.collected_at: reading.active_power_kw for reading in meter_readings
     }
     plant_readings: list[PlantPowerReading] = []
     for inverter_reading in inverter_readings:
@@ -538,8 +527,7 @@ def sync_plant_day_window(
     """
     if not _device_windows_complete(session, devices, window.window_start):
         logger.debug(
-            f"Skipping plant metrics for day={window.day}: "
-            "device windows incomplete"
+            f"Skipping plant metrics for day={window.day}: " "device windows incomplete"
         )
         return 0
 
@@ -566,7 +554,6 @@ def sync_plant_day_window(
     )
     for reading in plant_readings:
         upsert_plant_power_reading(session, reading)
-    session.commit()
     logger.info(
         f"Derived plant metrics for day={window.day}: "
         f"{len(plant_readings)} reading(s)"
