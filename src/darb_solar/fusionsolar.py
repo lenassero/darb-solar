@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import time
 from collections import deque
-from dataclasses import dataclass
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, ClassVar
 
 import requests
@@ -70,8 +70,8 @@ class EnergyBalance:
     consumption_kw: float
 
 
-# Documented limits — "Flow Control Using the API Account" (https://support.huawei.com/enterprise/en/doc/EDOC1100544235/b71c4d05/flow-control-using-the-api-account?idPath=258788303|258788491|258789989|23205712|21608721)
-# and "Authentication API" (https://support.huawei.com/enterprise/en/doc/EDOC1100544235/9676f1cf/authentication-api?idPath=258788303|258788491|258789989|23205712|21608721).
+# Documented limits — "Flow Control Using the API Account" (https://support.huawei.com/enterprise/en/doc/EDOC1100544235/b71c4d05/flow-control-using-the-api-account?idPath=258788303|258788491|258789989|23205712|21608721)  # noqa: E501
+# and "Authentication API" (https://support.huawei.com/enterprise/en/doc/EDOC1100544235/9676f1cf/authentication-api?idPath=258788303|258788491|258789989|23205712|21608721).  # noqa: E501
 # Daily list caps assume one plant (Roundup(1/100) = 1).
 # Real time device data assumes one device per type (Roundup(1/100) = 1).
 # Historical device data assumes one inverter and one meter (see
@@ -86,6 +86,7 @@ _RATE_LIMIT_RULES: dict[str, _RateLimitRule] = {
         window_seconds=_HISTORY_MIN_INTERVAL_SECONDS,
     ),
 }
+
 
 class FusionSolarError(Exception):
     """Raised when the FusionSolar API returns ``success: false``."""
@@ -110,6 +111,7 @@ class FusionSolarError(Exception):
         fail_code: int | None = None,
         payload: dict[str, Any] | None = None,
     ) -> None:
+        """Initialize a FusionSolarError."""
         detail = message
         if fail_code is not None:
             detail = f"{message} (failCode={fail_code})"
@@ -226,7 +228,7 @@ class FusionSolarClient:
 
     @property
     def xsrf_token(self) -> str | None:
-        """Current XSRF token, or ``None`` before ``login`` succeeds."""
+        """Return the XSRF token, or ``None`` before ``login`` succeeds."""
         return self._xsrf_token
 
     def login(self, user_name: str, system_code: str) -> str:
@@ -448,9 +450,7 @@ class FusionSolarClient:
         if len(history) < rule.max_calls:
             return 0.0
         return max(
-            rule.window_seconds
-            - (now - history[0])
-            + _RATE_LIMIT_RETRY_BUFFER_SECONDS,
+            rule.window_seconds - (now - history[0]) + _RATE_LIMIT_RETRY_BUFFER_SECONDS,
             0.0,
         )
 
@@ -589,7 +589,10 @@ class FusionSolarClient:
                 )
                 self._reauthenticate_before_post(authenticated=authenticated)
                 continue
-            if fail_code == 407 and failcode_407_retries_done < max_failcode_407_retries:
+            if (
+                fail_code == 407
+                and failcode_407_retries_done < max_failcode_407_retries
+            ):
                 logger.warning(
                     f"POST {path} rate-limit pass {post_number}/"
                     f"{posts_on_rate_limit} returned failCode=407, "
@@ -651,11 +654,7 @@ def filter_devices_by_type(
     dev_type_ids: frozenset[int],
 ) -> list[dict[str, Any]]:
     """Keep devices whose ``devTypeId`` is in ``dev_type_ids``."""
-    return [
-        device
-        for device in devices
-        if device_type_id(device) in dev_type_ids
-    ]
+    return [device for device in devices if device_type_id(device) in dev_type_ids]
 
 
 def filter_inverters(devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
