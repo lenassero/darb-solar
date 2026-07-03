@@ -6,6 +6,7 @@ import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
@@ -38,9 +39,33 @@ def resolve_database_url(database_url: str | None = None) -> str:
         Postgres connection URL.
     """
     if database_url is not None:
+        return normalize_database_url(database_url)
+
+    return normalize_database_url(
+        os.environ.get("DARB_SOLAR_DATABASE_URL", DEFAULT_DATABASE_URL)
+    )
+
+
+def normalize_database_url(database_url: str) -> str:
+    """Normalize a Postgres URL for SQLAlchemy + psycopg3.
+
+    Accepts hosted-Postgres URLs in ``postgresql://`` form and rewrites them to
+    ``postgresql+psycopg://`` so callers do not need dialect-specific env vars.
+    """
+    if database_url.startswith("postgresql://"):
+        return database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+    return database_url
+
+
+def redact_database_url(database_url: str) -> str:
+    """Return a log-safe database URL with credentials removed."""
+    parsed = urlsplit(database_url)
+    if "@" not in parsed.netloc:
         return database_url
 
-    return os.environ.get("DARB_SOLAR_DATABASE_URL", DEFAULT_DATABASE_URL)
+    _, host = parsed.netloc.rsplit("@", 1)
+    redacted = parsed._replace(netloc=f"***:***@{host}")
+    return urlunsplit(redacted)
 
 
 def get_engine(database_url: str | None = None) -> Engine:

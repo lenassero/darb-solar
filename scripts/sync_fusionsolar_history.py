@@ -10,9 +10,9 @@ from datetime import date, datetime, timedelta
 from dotenv import load_dotenv
 from loguru import logger
 
-from darb_solar.db import PROJECT_ROOT, resolve_database_url
-from darb_solar.time import DEFAULT_TIMEZONE
+from darb_solar.db import PROJECT_ROOT, redact_database_url, resolve_database_url
 from darb_solar.history_sync import sync_history
+from darb_solar.time import DEFAULT_TIMEZONE
 
 
 def parse_sync_date(
@@ -59,9 +59,7 @@ def parse_sync_date(
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line argument parser."""
     parser = argparse.ArgumentParser(
-        description=(
-            "Sync FusionSolar device history into a Postgres database."
-        ),
+        description=("Sync FusionSolar device history into a Postgres database."),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -120,12 +118,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.from_date is not None and args.to_date is not None:
         if args.from_date > args.to_date:
             logger.error(
-                f"--from-date {args.from_date} is after "
-                f"--to-date {args.to_date}."
+                f"--from-date {args.from_date} is after " f"--to-date {args.to_date}."
             )
             return 1
 
-    logger.info(f"Using database at {database_url}")
+    logger.info(f"Using database at {redact_database_url(database_url)}")
 
     try:
         result = sync_history(

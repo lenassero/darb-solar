@@ -3,10 +3,12 @@
 from darb_solar.db.connection import (
     DEFAULT_DATABASE_URL,
     DEFAULT_TIMEZONE_NAME,
-    DbSession,
     PROJECT_ROOT,
+    DbSession,
     get_engine,
     get_session,
+    normalize_database_url,
+    redact_database_url,
     resolve_database_url,
 )
 from darb_solar.db.models import (
@@ -16,7 +18,6 @@ from darb_solar.db.models import (
     PlantPowerReading,
     SyncWindow,
 )
-from darb_solar.db.types import DeviceRole, SyncWindowCheckpointStatus
 from darb_solar.db.reads import (
     get_latest_collected_at,
     get_latest_plant_synced_at,
@@ -27,6 +28,7 @@ from darb_solar.db.reads import (
     list_plant_power_readings,
 )
 from darb_solar.db.time import utc_now
+from darb_solar.db.types import DeviceRole, SyncWindowCheckpointStatus
 from darb_solar.db.writes import (
     upsert_device,
     upsert_device_power_reading,
@@ -49,6 +51,8 @@ __all__ = [
     "DbSession",
     "get_engine",
     "get_session",
+    "normalize_database_url",
+    "redact_database_url",
     "get_latest_collected_at",
     "get_latest_plant_synced_at",
     "get_plant",

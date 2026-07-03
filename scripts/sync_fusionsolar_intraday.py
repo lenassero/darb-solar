@@ -10,7 +10,7 @@ from datetime import timedelta
 from dotenv import load_dotenv
 from loguru import logger
 
-from darb_solar.db import PROJECT_ROOT, resolve_database_url
+from darb_solar.db import PROJECT_ROOT, redact_database_url, resolve_database_url
 from darb_solar.intraday_sync import sync_intraday
 
 
@@ -34,8 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=5,
         help=(
-            "Skip a device when the fetch range is shorter than this many "
-            "minutes."
+            "Skip a device when the fetch range is shorter than this many " "minutes."
         ),
     )
     parser.add_argument(
@@ -71,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
 
     database_url = resolve_database_url(args.database_url)
 
-    logger.info(f"Using database at {database_url}")
+    logger.info(f"Using database at {redact_database_url(database_url)}")
 
     try:
         result = sync_intraday(
