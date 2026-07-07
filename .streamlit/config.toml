@@ -1,2 +1,5 @@
 [server]
 folderWatchList = ["src"]
+
+[theme]
+base="light"
