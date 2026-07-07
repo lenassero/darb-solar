@@ -92,6 +92,30 @@ DARB_SOLAR_DATABASE_URL=postgresql+psycopg://darb_solar:darb_solar@localhost:543
 same URL format works for hosted Postgres providers (Neon, Supabase, and
 similar) when you deploy later.
 
+### Streamlit SQL secret
+
+The Streamlit dashboard uses its own SQL connection secret and does not read
+`DARB_SOLAR_DATABASE_URL` by default. That keeps the deployed dashboard free to
+use a Supabase IPv4-capable pooler or transaction endpoint while the sync code
+continues to use the repository-wide database URL.
+
+By default, `app/streamlit_app.py` opens `st.connection("supabase", type="sql")`.
+Set the secret in Streamlit Community Cloud under `Secrets`, or locally in
+`.streamlit/secrets.toml`:
+
+```toml
+[connections.supabase]
+url = "postgresql+psycopg://USER:PASSWORD@HOST:6543/postgres?sslmode=require"
+```
+
+Point `url` at the Supabase IPv4-compatible session pooler or transaction
+endpoint you want the dashboard to use. Keep `DARB_SOLAR_DATABASE_URL` for the
+sync CLI, bootstrap scripts, and Cloud Run sync deployment.
+
+If you need a different Streamlit connection name, set
+`DARB_SOLAR_STREAMLIT_SQL_CONNECTION` in the app environment and create the
+matching `[connections.<name>]` secret instead.
+
 ## Data directory
 
 Runtime artifacts live under `data/`:

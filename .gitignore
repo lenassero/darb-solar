@@ -3,6 +3,7 @@ data/
 
 # Environment and virtualenv
 .env
+.streamlit/secrets.toml
 .venv/
 
 # Python

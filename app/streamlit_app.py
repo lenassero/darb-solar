@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import cast
 from zoneinfo import ZoneInfo
 
 import streamlit as st
 from dotenv import load_dotenv
+from streamlit.connections import SQLConnection
 
 # The package uses a src/ layout. When the Streamlit app is deployed from
 # source, make ``src`` importable before importing ``darb_solar``.
@@ -22,8 +26,6 @@ from darb_solar.db import (  # noqa: E402
     DbSession,
     get_latest_plant_synced_at,
     get_plant,
-    get_session,
-    resolve_database_url,
 )
 from darb_solar.viz.daily import (  # noqa: E402
     build_daily_chart,
@@ -34,6 +36,44 @@ from darb_solar.viz.daily import (  # noqa: E402
 
 def _format_kwh(value: float) -> str:
     return f"{value:.1f}".replace(".", ",")
+
+
+def _resolve_streamlit_connection_name() -> str:
+    """Return the Streamlit SQL connection name for dashboard reads.
+
+    Returns
+    -------
+    str
+        Connection name used with `st.connection()`. Defaults to `supabase`, a
+        Streamlit-only SQL secret intended for the dashboard deployment.
+    """
+    return os.environ.get("DARB_SOLAR_STREAMLIT_SQL_CONNECTION", "supabase")
+
+
+def _get_streamlit_sql_connection() -> SQLConnection:
+    """Return the Streamlit-managed SQL connection for dashboard reads.
+
+    Returns
+    -------
+    streamlit.connections.SQLConnection
+        Cached SQL connection resolved from Streamlit secrets and optional
+        environment configuration.
+    """
+    return st.connection(_resolve_streamlit_connection_name(), type="sql")
+
+
+@contextmanager
+def _get_streamlit_session() -> Iterator[DbSession]:
+    """Yield a SQLAlchemy session sourced from Streamlit's SQL connection.
+
+    Yields
+    ------
+    DbSession
+        SQLAlchemy session compatible with the existing `darb_solar.db.reads`
+        helpers.
+    """
+    with _get_streamlit_sql_connection().session as session:
+        yield cast(DbSession, session)
 
 
 def _render_colored_metric(
@@ -155,8 +195,7 @@ def main() -> None:
         st.error("Set DARB_SOLAR_PLANT_CODE in the environment or .env file.")
         return
 
-    database_url = resolve_database_url()
-    with get_session(database_url) as session:
+    with _get_streamlit_session() as session:
         plant = get_plant(session, plant_code)
         if plant is None:
             st.error(
