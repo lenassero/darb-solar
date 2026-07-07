@@ -10,14 +10,27 @@ Create a virtual environment and install dependencies:
 cd darb-solar
 uv venv
 source .venv/bin/activate
-uv sync
+uv sync --extra viz --group dev
 ```
+
+Core runtime deps install with `uv sync` alone. Add `--extra viz` for the
+dashboard stack (streamlit, pandas, plotly, matplotlib) and `--group dev` for
+local tooling (jupyter, pre-commit, ipdb).
 
 Add/update dependencies with:
 
 ```bash
-uv add <package>
-uv add --dev <package>
+uv add <package>              # core runtime dep
+uv add --optional viz <package>  # dashboard / viz extra
+uv add --group dev <package>     # dev tooling
+uv add --group cloudrun <package>  # Cloud Run-only dep
+```
+
+After changing Cloud Run deps, regenerate the buildpack lockfile:
+
+```bash
+uv lock
+./scripts/export_cloudrun_requirements.sh
 ```
 
 ## Local database

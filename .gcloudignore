@@ -1,0 +1,30 @@
+# Keep the Cloud Run source upload small and free of secrets/artifacts.
+.git/
+.gitignore
+
+# Local secrets and env
+.env
+.env.*
+
+# Virtualenvs and caches
+.venv/
+**/__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Local data, logs, and generated artifacts
+data/
+images/
+
+# Notebooks and dashboard (not needed by the sync function)
+notebooks/
+app/
+src/darb_solar/viz/
+
+# Local scheduler and dev tooling
+launchd/
+.devcontainer/
+.streamlit/
+
+# Local DB/migration helpers not used at runtime
+scripts/

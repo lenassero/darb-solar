@@ -6,17 +6,26 @@
  requires-python = ">=3.11"
 dependencies = [
   "loguru",
-  "matplotlib",
-  "pandas",
-  "plotly>=6.8.0",
   "psycopg[binary]",
   "python-dotenv",
   "requests",
   "sqlalchemy>=2.0",
+]
+
+[project.optional-dependencies]
+viz = [
+  "matplotlib",
+  "pandas",
+  "plotly>=6.8.0",
   "streamlit>=1.58.0",
 ]
 
- [dependency-groups]
+[dependency-groups]
+# Runtime dependencies for the Cloud Run sync function; exported to
+# requirements.txt via scripts/export_cloudrun_requirements.sh.
+cloudrun = [
+  "functions-framework>=3.8,<4",
+]
 dev = [
   "ipdb>=0.13.13",
   "jupyter",
