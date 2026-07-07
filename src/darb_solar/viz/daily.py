@@ -11,8 +11,8 @@ import pandas as pd
 import plotly.graph_objects as go
 
 from darb_solar.db import DbSession
-from darb_solar.db.reads import list_plant_power_readings
 from darb_solar.db.models import PlantPowerReading
+from darb_solar.db.reads import list_plant_power_readings
 
 _FIVE_MINUTES_MS = 5 * 60 * 1000
 _ONE_HOUR_MS = 60 * 60 * 1000
@@ -30,7 +30,7 @@ _SERIES_BG_COLORS = {
     "grid_import_kw": "#F9DEDC",
 }
 
-_DONUT_HEIGHT = 280
+_DONUT_HEIGHT = 360
 _DONUT_HOLE = 0.4
 _DONUT_PULL = 0.08
 _DONUT_TEXT_SIZE = 22
@@ -83,6 +83,7 @@ def _total_consumption_kwh(df: pd.DataFrame) -> float:
     if df.empty:
         return 0.0
     return df["consumption_kw"].sum() * _INTERVAL_HOURS
+
 
 def _plant_reading_rows(readings: list[PlantPowerReading]) -> list[dict[str, object]]:
     return [
@@ -148,9 +149,7 @@ def load_day_data(
     df = pd.DataFrame(_plant_reading_rows(readings))
     df["collected_at"] = df["collected_at"].dt.tz_convert(tz)
     df["self_consumed_kw"] = df["pv_production_kw"] - df["grid_export_kw"]
-    df["grid_import_kw"] = (df["consumption_kw"] - df["pv_production_kw"]).clip(
-        lower=0
-    )
+    df["grid_import_kw"] = (df["consumption_kw"] - df["pv_production_kw"]).clip(lower=0)
     return df
 
 
@@ -294,9 +293,7 @@ def build_daily_donut_chart(df: pd.DataFrame) -> go.Figure:
     """
     totals = summarize_daily_energy_kwh(df)
     slices = [
-        (label, kwh, fg_color)
-        for label, kwh, fg_color, _bg_color in totals
-        if kwh > 0
+        (label, kwh, fg_color) for label, kwh, fg_color, _bg_color in totals if kwh > 0
     ]
 
     fig = go.Figure()
@@ -305,7 +302,7 @@ def build_daily_donut_chart(df: pd.DataFrame) -> go.Figure:
     if not slices:
         fig.update_layout(
             height=_DONUT_HEIGHT,
-            margin=dict(t=10, b=10, l=10, r=10),
+            margin=dict(t=15, b=60, l=15, r=15),
             images=center_images,
             annotations=center_annotations,
         )
@@ -332,17 +329,16 @@ def build_daily_donut_chart(df: pd.DataFrame) -> go.Figure:
             marker={"colors": list(colors)},
             textinfo="percent",
             textposition="inside",
+            insidetextorientation="horizontal",
             textfont={"size": _DONUT_TEXT_SIZE},
-            hovertemplate=(
-                "%{label}<br>%{value:.1f} kWh<br>%{percent}<extra></extra>"
-            ),
+            hovertemplate=("%{label}<br>%{value:.1f} kWh<br>%{percent}<extra></extra>"),
         )
     )
     fig.update_layout(
         height=_DONUT_HEIGHT,
         showlegend=True,
         legend={"traceorder": "normal"},
-        margin=dict(t=10, b=10, l=10, r=10),
+        margin=dict(t=10, b=60, l=10, r=10),
         images=center_images,
         annotations=center_annotations,
     )

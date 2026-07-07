@@ -151,7 +151,7 @@ def _render_date_header(
 
     _, nav_col, _ = st.columns([1, 2, 1])
     prev_col, date_col, next_col = nav_col.columns(
-        [0.1, 1, 0.4],
+        [0.2, 1, 0.4],
     )
 
     prev_col.button(
@@ -205,21 +205,41 @@ def main() -> None:
             return
 
         tz = ZoneInfo(plant.timezone)
-        selected_date = _render_date_header(
-            session=session,
-            plant_code=plant_code,
-            tz=tz,
-        )
+        _, centered_col, _ = st.columns([1, 2, 1])
+        with centered_col:
+            selected_date = _render_date_header(
+                session=session,
+                plant_code=plant_code,
+                tz=tz,
+            )
 
         df = load_day_data(session, plant_code, selected_date, tz)
         if df.empty:
             st.info("No data for this date.")
             return
         donut_fig = build_daily_donut_chart(df)
-        _, donut_col, _ = st.columns([1, 1, 1])
-        donut_col.plotly_chart(donut_fig, use_container_width=True)
+        donut_fig.update_layout(
+            legend={
+                "orientation": "h",
+                "yanchor": "top",
+                "y": -0.02,
+                "xanchor": "center",
+                "x": 0.5,
+            }
+        )
+        with centered_col:
+            st.plotly_chart(donut_fig, use_container_width=True)
         show_detail = st.toggle("Détail (5 min)", value=False)
         fig = build_daily_chart(df, detail=show_detail)
+        fig.update_layout(
+            legend={
+                "orientation": "h",
+                "yanchor": "top",
+                "y": -0.02,
+                "xanchor": "center",
+                "x": 0.5,
+            }
+        )
         st.plotly_chart(
             fig,
             use_container_width=True,
