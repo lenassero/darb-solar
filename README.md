@@ -38,7 +38,8 @@ uv lock
 `requirements.txt` at the repository root is for the Cloud Run deployment.
 `app/requirements.txt` is for Streamlit Community Cloud because the app
 entrypoint lives in `app/streamlit_app.py`, and Streamlit checks that
-directory first when resolving app dependencies.
+directory first when resolving app dependencies. The Streamlit app imports
+the local `darb_solar` package from `src/` directly.
 
 ## Local database
 

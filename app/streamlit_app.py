@@ -3,21 +3,29 @@
 from __future__ import annotations
 
 import os
+import sys
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import streamlit as st
 from dotenv import load_dotenv
 
-from darb_solar.db import (
-    DbSession,
+# The package uses a src/ layout. When the Streamlit app is deployed from
+# source, make ``src`` importable before importing ``darb_solar``.
+_SRC_DIR = str(Path(__file__).resolve().parents[1] / "src")
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)
+
+from darb_solar.db import (  # noqa: E402
     PROJECT_ROOT,
+    DbSession,
     get_latest_plant_synced_at,
     get_plant,
     get_session,
     resolve_database_url,
 )
-from darb_solar.viz.daily import (
+from darb_solar.viz.daily import (  # noqa: E402
     build_daily_chart,
     build_daily_donut_chart,
     load_day_data,

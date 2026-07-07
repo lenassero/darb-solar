@@ -33,9 +33,8 @@ HEADER="# Streamlit Community Cloud dependencies (auto-generated).
 #
 # Source: [project].dependencies + [project.optional-dependencies].viz in
 # pyproject.toml.
-# The local package is installed from the repository root because the app
-# entrypoint lives in app/.
--e ..
+# The local package is imported from src/ by app/streamlit_app.py because
+# Streamlit Community Cloud resolves app/requirements.txt from outside app/.
 "
 
 BODY="$(uv export \
