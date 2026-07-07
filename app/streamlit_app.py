@@ -235,10 +235,10 @@ def main() -> None:
             legend={
                 "orientation": "h",
                 "yanchor": "top",
-                "y": -0.02,
+                "y": -0.28,
                 "xanchor": "center",
                 "x": 0.5,
-            }
+            },
         )
         st.plotly_chart(
             fig,
