@@ -26,12 +26,19 @@ uv add --group dev <package>     # dev tooling
 uv add --group cloudrun <package>  # Cloud Run-only dep
 ```
 
-After changing Cloud Run deps, regenerate the buildpack lockfile:
+After changing deployment dependencies, regenerate the exported requirement
+files:
 
 ```bash
 uv lock
 ./scripts/export_cloudrun_requirements.sh
+./scripts/export_streamlit_requirements.sh
 ```
+
+`requirements.txt` at the repository root is for the Cloud Run deployment.
+`app/requirements.txt` is for Streamlit Community Cloud because the app
+entrypoint lives in `app/streamlit_app.py`, and Streamlit checks that
+directory first when resolving app dependencies.
 
 ## Local database
 
