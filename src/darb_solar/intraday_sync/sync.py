@@ -1,4 +1,4 @@
-"""Incremental history backfill for the current calendar day."""
+"""Incremental history backfill for today and the overnight gap."""
 
 from __future__ import annotations
 
@@ -45,14 +45,18 @@ def _intraday_bounds(
 ) -> tuple[datetime, datetime]:
     """Return ``(start_dt, end_dt)`` for an intraday history fetch.
 
-    ``start_dt`` is the later of the device's latest stored reading and midnight today
-    in ``now``'s timezone. ``end_dt`` is ``now``.
+    ``end_dt`` is ``now``. ``start_dt`` is the device's latest stored reading when that
+    reading falls on today or yesterday, so the first post-midnight run can close the
+    overnight gap. Older gaps stay with the daily history sync: when there is no latest
+    reading, or it is older than yesterday, ``start_dt`` is midnight today in ``now``'s
+    timezone.
     """
     start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    start_of_yesterday = start_of_today - timedelta(days=1)
     latest_collected_at = get_latest_collected_at(session, device.dev_id)
-    if latest_collected_at is None:
+    if latest_collected_at is None or latest_collected_at < start_of_yesterday:
         return start_of_today, now
-    return max(latest_collected_at, start_of_today), now
+    return latest_collected_at, now
 
 
 def sync_device_intraday(
@@ -249,10 +253,12 @@ def sync_intraday(
     fusionsolar_session: FusionSolarSession | None = None,
     min_gap: timedelta = _MIN_SYNC_GAP,
 ) -> SyncRunResult:
-    """Login, load DB config, and incrementally sync today for a plant.
+    """Login, load DB config, and incrementally sync a plant.
 
-    Fetches history from each device's latest ``collected_at`` (or start of
-    today) through now, without touching ``sync_windows`` checkpoints.
+    Fetches history from each device's latest ``collected_at`` when that falls
+    on today or yesterday (so midnight can close the overnight gap), otherwise
+    from start of today, through now. Does not touch ``sync_windows``
+    checkpoints.
 
     Parameters
     ----------

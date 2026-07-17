@@ -1,4 +1,4 @@
-"""Incremental FusionSolar history sync for the current calendar day."""
+"""Incremental FusionSolar history sync for today and the overnight gap."""
 
 from __future__ import annotations
 
