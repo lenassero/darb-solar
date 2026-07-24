@@ -273,3 +273,48 @@ The daily job above syncs one complete day (yesterday). For an initial
 historical backfill, run the sync manually without date flags (defaults to
 `2026-01-01` through yesterday) and allow many hours to complete. After that,
 the scheduled job keeps the database current one day at a time.
+
+## Intraday sync (Cloud Run)
+
+Near-real-time device readings run on Cloud Run, triggered by Cloud Scheduler
+every 30 minutes. FusionSolar enforces ~300s between history calls; sleeping
+inside a single request would bill several minutes of Cloud Run CPU every
+tick. The deploy script attaches **two staggered jobs** that each sync one
+device instead. The 6-minute gap keeps those waits outside Cloud Run, so each
+invocation is only a few seconds of billed compute.
+
+Deploy or refresh with:
+
+```bash
+./scripts/deploy_cloudrun_intraday.sh
+```
+
+### Scheduler jobs
+
+Both jobs POST to the same Cloud Run service (`darb-solar-intraday`) with
+`Content-Type: application/json` and OIDC auth. Timezone is
+`Africa/Casablanca`.
+
+| Job | Cron | Body |
+|-----|------|------|
+| `darb-solar-intraday-inverter` | `0,30 * * * *` | `{"role":"inverter","derive_plant":false}` |
+| `darb-solar-intraday-meter` | `6,36 * * * *` | `{"role":"meter","derive_plant":true}` |
+
+Job A writes inverter readings only. Job B writes meter readings, then derives
+plant metrics over the same half-open window (using inverter rows already
+stored by job A).
+
+The older single job `darb-solar-intraday-sync` is deleted on deploy if it
+still exists.
+
+### Request body
+
+`main.py` accepts an optional JSON body:
+
+| Field | Values | Default |
+|-------|--------|---------|
+| `role` | `inverter` or `meter` | omitted = sync all devices |
+| `derive_plant` | `true` or `false` | `false` when `role` is set; `true` when the body is empty / has no `role` |
+
+Local CLI (`scripts/sync_fusionsolar_intraday.py`) still syncs all devices in
+one process; in-process waits are fine off Cloud Run.
