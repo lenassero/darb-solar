@@ -34,9 +34,7 @@ def get_plant(
     Plant or None
         Plant metadata when present.
     """
-    return session.scalar(
-        select(Plant).where(Plant.plant_code == plant_code)
-    )
+    return session.scalar(select(Plant).where(Plant.plant_code == plant_code))
 
 
 def list_devices(
@@ -123,14 +121,14 @@ def get_latest_collected_at(
     )
 
 
-def get_latest_plant_synced_at(
+def get_latest_plant_collected_at(
     session: DbSession,
     *,
     plant_code: str,
     collected_from: datetime,
     collected_to: datetime,
 ) -> datetime | None:
-    """Return the latest ``synced_at`` for plant readings in a time range.
+    """Return the latest plant metric ``collected_at`` in a time range.
 
     Parameters
     ----------
@@ -146,11 +144,11 @@ def get_latest_plant_synced_at(
     Returns
     -------
     datetime or None
-        Latest ``synced_at`` timestamp in the range, or ``None`` when no plant
-        readings exist.
+        Latest ``collected_at`` timestamp in the range, or ``None`` when no
+        plant readings exist.
     """
     return session.scalar(
-        select(func.max(PlantPowerReading.synced_at)).where(
+        select(func.max(PlantPowerReading.collected_at)).where(
             PlantPowerReading.plant_code == plant_code,
             PlantPowerReading.collected_at >= collected_from,
             PlantPowerReading.collected_at < collected_to,
@@ -165,7 +163,7 @@ def list_device_power_readings(
     collected_from: datetime,
     collected_to: datetime,
 ) -> list[DevicePowerReading]:
-    """Return device readings within a half-open ``[collected_from, collected_to)`` range.
+    """Return device readings in ``[collected_from, collected_to)``.
 
     Parameters
     ----------
@@ -203,7 +201,7 @@ def list_plant_power_readings(
     collected_from: datetime,
     collected_to: datetime,
 ) -> list[PlantPowerReading]:
-    """Return plant readings within a half-open ``[collected_from, collected_to)`` range.
+    """Return plant readings in ``[collected_from, collected_to)``.
 
     Parameters
     ----------

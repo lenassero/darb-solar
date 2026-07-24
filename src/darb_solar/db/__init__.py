@@ -20,7 +20,7 @@ from darb_solar.db.models import (
 )
 from darb_solar.db.reads import (
     get_latest_collected_at,
-    get_latest_plant_synced_at,
+    get_latest_plant_collected_at,
     get_plant,
     get_sync_window,
     list_device_power_readings,
@@ -54,7 +54,7 @@ __all__ = [
     "normalize_database_url",
     "redact_database_url",
     "get_latest_collected_at",
-    "get_latest_plant_synced_at",
+    "get_latest_plant_collected_at",
     "get_plant",
     "get_sync_window",
     "list_device_power_readings",

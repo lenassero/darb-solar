@@ -27,7 +27,7 @@ if _SRC_DIR not in sys.path:
 from darb_solar.db import (  # noqa: E402
     PROJECT_ROOT,
     DbSession,
-    get_latest_plant_synced_at,
+    get_latest_plant_collected_at,
     get_plant,
 )
 from darb_solar.viz.daily import (  # noqa: E402
@@ -169,13 +169,13 @@ def _day_bounds(day: date, tz: ZoneInfo) -> tuple[datetime, datetime]:
     return day_start, day_start + timedelta(days=1)
 
 
-def _format_last_updated(synced_at: datetime | None, tz: ZoneInfo) -> str:
-    # synced_at is stored as UTC by the sync CLI; show it in plant-local time.
-    if synced_at is None:
+def _format_last_updated(collected_at: datetime | None, tz: ZoneInfo) -> str:
+    # collected_at is the plant-metric sample time; show it in plant-local time.
+    if collected_at is None:
         return "aucune donnée synchronisée"
-    if synced_at.tzinfo is None:
-        synced_at = synced_at.replace(tzinfo=ZoneInfo("UTC"))
-    local = synced_at.astimezone(tz)
+    if collected_at.tzinfo is None:
+        collected_at = collected_at.replace(tzinfo=ZoneInfo("UTC"))
+    local = collected_at.astimezone(tz)
     return local.strftime("%d/%m/%Y à %H:%M")
 
 
@@ -209,13 +209,13 @@ def _render_date_header(
 
     selected_date = st.session_state.selected_date
     day_start, day_end = _day_bounds(selected_date, tz)
-    synced_at = get_latest_plant_synced_at(
+    collected_at = get_latest_plant_collected_at(
         session,
         plant_code=plant_code,
         collected_from=day_start,
         collected_to=day_end,
     )
-    updated_label = _format_last_updated(synced_at, tz)
+    updated_label = _format_last_updated(collected_at, tz)
     with date_col:
         st.caption(f"Dernière mise à jour : {updated_label}")
 
