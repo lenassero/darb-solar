@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy the intraday sync to Cloud Run and attach a Cloud Scheduler job.
+# Deploy the intraday sync to Cloud Run and attach staggered Cloud Scheduler jobs.
 #
 # Prerequisites:
 #   - gcloud CLI authenticated with deploy permissions
@@ -11,6 +11,11 @@
 #
 # Optional overrides:
 #   GCP_PROJECT=darb-solar GCP_REGION=europe-west1 ./scripts/deploy_cloudrun_intraday.sh
+#
+# Scheduler layout (Africa/Casablanca):
+#   - inverter at :00/:30 — JSON {"role":"inverter","derive_plant":false}
+#   - meter at :06/:36 — JSON {"role":"meter","derive_plant":true}
+# The 6-minute gap keeps FusionSolar history rate-limit waits outside Cloud Run.
 
 set -euo pipefail
 
@@ -20,14 +25,16 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 GCP_PROJECT="${GCP_PROJECT:-darb-solar}"
 GCP_REGION="${GCP_REGION:-europe-west1}"
 SERVICE_NAME="${SERVICE_NAME:-darb-solar-intraday}"
-SCHEDULER_JOB_NAME="${SCHEDULER_JOB_NAME:-darb-solar-intraday-sync}"
+# Legacy single-job name removed on each deploy once the staggered jobs exist.
+LEGACY_SCHEDULER_JOB_NAME="${LEGACY_SCHEDULER_JOB_NAME:-darb-solar-intraday-sync}"
+SCHEDULER_INVERTER_JOB_NAME="${SCHEDULER_INVERTER_JOB_NAME:-darb-solar-intraday-inverter}"
+SCHEDULER_METER_JOB_NAME="${SCHEDULER_METER_JOB_NAME:-darb-solar-intraday-meter}"
 SCHEDULER_SA_NAME="${SCHEDULER_SA_NAME:-darb-solar-scheduler}"
-SCHEDULE_CRON="${SCHEDULE_CRON:-*/30 * * * *}"
-# The sync can take several minutes because FusionSolar enforces rate-limit
-# spacing between history calls, so give Scheduler a deadline that matches the
-# Cloud Run request timeout to avoid premature retries mid-run.
-SCHEDULER_ATTEMPT_DEADLINE="${SCHEDULER_ATTEMPT_DEADLINE:-900s}"
-TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-900}"
+SCHEDULE_INVERTER_CRON="${SCHEDULE_INVERTER_CRON:-0,30 * * * *}"
+SCHEDULE_METER_CRON="${SCHEDULE_METER_CRON:-6,36 * * * *}"
+# Each job syncs one device; rate-limit spacing is external, so keep deadlines short.
+SCHEDULER_ATTEMPT_DEADLINE="${SCHEDULER_ATTEMPT_DEADLINE:-60s}"
+TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-60}"
 MEMORY="${MEMORY:-256Mi}"
 CONCURRENCY="${CONCURRENCY:-1}"
 
@@ -162,42 +169,72 @@ grant_invoker() {
     --quiet >/dev/null
 }
 
+delete_legacy_scheduler_job() {
+  if gcloud scheduler jobs describe "${LEGACY_SCHEDULER_JOB_NAME}" \
+    --project="${GCP_PROJECT}" \
+    --location="${GCP_REGION}" >/dev/null 2>&1; then
+    log "Deleting legacy Cloud Scheduler job ${LEGACY_SCHEDULER_JOB_NAME}"
+    gcloud scheduler jobs delete "${LEGACY_SCHEDULER_JOB_NAME}" \
+      --project="${GCP_PROJECT}" \
+      --location="${GCP_REGION}" \
+      --quiet
+  else
+    log "Legacy scheduler job ${LEGACY_SCHEDULER_JOB_NAME} not present"
+  fi
+}
+
 ensure_scheduler_job() {
+  local job_name="$1"
+  local schedule="$2"
+  local message_body="$3"
+  local service_url="$4"
+
+  log "Ensuring Cloud Scheduler job ${job_name} (${schedule}) -> ${service_url}"
+
+  local common_args=(
+    --project="${GCP_PROJECT}"
+    --location="${GCP_REGION}"
+    --schedule="${schedule}"
+    --uri="${service_url}"
+    --http-method=POST
+    --headers="Content-Type=application/json"
+    --message-body="${message_body}"
+    --oidc-service-account-email="${SCHEDULER_SA_EMAIL}"
+    --oidc-token-audience="${service_url}"
+    --attempt-deadline="${SCHEDULER_ATTEMPT_DEADLINE}"
+    --time-zone="Africa/Casablanca"
+    --quiet
+  )
+
+  if gcloud scheduler jobs describe "${job_name}" \
+    --project="${GCP_PROJECT}" \
+    --location="${GCP_REGION}" >/dev/null 2>&1; then
+    gcloud scheduler jobs update http "${job_name}" "${common_args[@]}"
+  else
+    gcloud scheduler jobs create http "${job_name}" "${common_args[@]}"
+  fi
+}
+
+ensure_scheduler_jobs() {
   local service_url
   service_url="$(gcloud run services describe "${SERVICE_NAME}" \
     --project="${GCP_PROJECT}" \
     --region="${GCP_REGION}" \
     --format='value(status.url)')"
 
-  log "Ensuring Cloud Scheduler job ${SCHEDULER_JOB_NAME} -> ${service_url}"
+  delete_legacy_scheduler_job
 
-  if gcloud scheduler jobs describe "${SCHEDULER_JOB_NAME}" \
-    --project="${GCP_PROJECT}" \
-    --location="${GCP_REGION}" >/dev/null 2>&1; then
-    gcloud scheduler jobs update http "${SCHEDULER_JOB_NAME}" \
-      --project="${GCP_PROJECT}" \
-      --location="${GCP_REGION}" \
-      --schedule="${SCHEDULE_CRON}" \
-      --uri="${service_url}" \
-      --http-method=POST \
-      --oidc-service-account-email="${SCHEDULER_SA_EMAIL}" \
-      --oidc-token-audience="${service_url}" \
-      --attempt-deadline="${SCHEDULER_ATTEMPT_DEADLINE}" \
-      --time-zone="Africa/Casablanca" \
-      --quiet
-  else
-    gcloud scheduler jobs create http "${SCHEDULER_JOB_NAME}" \
-      --project="${GCP_PROJECT}" \
-      --location="${GCP_REGION}" \
-      --schedule="${SCHEDULE_CRON}" \
-      --uri="${service_url}" \
-      --http-method=POST \
-      --oidc-service-account-email="${SCHEDULER_SA_EMAIL}" \
-      --oidc-token-audience="${service_url}" \
-      --attempt-deadline="${SCHEDULER_ATTEMPT_DEADLINE}" \
-      --time-zone="Africa/Casablanca" \
-      --quiet
-  fi
+  ensure_scheduler_job \
+    "${SCHEDULER_INVERTER_JOB_NAME}" \
+    "${SCHEDULE_INVERTER_CRON}" \
+    '{"role":"inverter","derive_plant":false}' \
+    "${service_url}"
+
+  ensure_scheduler_job \
+    "${SCHEDULER_METER_JOB_NAME}" \
+    "${SCHEDULE_METER_CRON}" \
+    '{"role":"meter","derive_plant":true}' \
+    "${service_url}"
 }
 
 main() {
@@ -209,7 +246,7 @@ main() {
   sync_secrets
   deploy_service
   grant_invoker
-  ensure_scheduler_job
+  ensure_scheduler_jobs
 
   local service_url
   service_url="$(gcloud run services describe "${SERVICE_NAME}" \
@@ -219,10 +256,14 @@ main() {
 
   log "Deployment complete"
   echo "Service URL: ${service_url}"
-  echo "Scheduler: ${SCHEDULER_JOB_NAME} (${SCHEDULE_CRON}, Africa/Casablanca)"
+  echo "Scheduler inverter: ${SCHEDULER_INVERTER_JOB_NAME} (${SCHEDULE_INVERTER_CRON}, Africa/Casablanca)"
+  echo "Scheduler meter:    ${SCHEDULER_METER_JOB_NAME} (${SCHEDULE_METER_CRON}, Africa/Casablanca)"
   echo ""
-  echo "Manual test:"
-  echo "  curl -X POST -H \"Authorization: Bearer \$(gcloud auth print-identity-token)\" ${service_url}"
+  echo "Manual test (inverter only):"
+  echo "  curl -X POST -H \"Authorization: Bearer \$(gcloud auth print-identity-token)\" \\"
+  echo "    -H \"Content-Type: application/json\" \\"
+  echo "    -d '{\"role\":\"inverter\",\"derive_plant\":false}' \\"
+  echo "    ${service_url}"
 }
 
 main "$@"
