@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
@@ -13,6 +14,8 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 from dotenv import load_dotenv
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from streamlit.connections import SQLConnection
 
 # The package uses a src/ layout. When the Streamlit app is deployed from
@@ -32,6 +35,10 @@ from darb_solar.viz.daily import (  # noqa: E402
     build_daily_donut_chart,
     load_day_data,
 )
+
+# Supabase may close the first connection while waking from idle.
+_CONNECT_ATTEMPTS = 3
+_CONNECT_RETRY_SECONDS = 1.5
 
 
 def _format_kwh(value: float) -> str:
@@ -57,14 +64,44 @@ def _get_streamlit_sql_connection() -> SQLConnection:
     -------
     streamlit.connections.SQLConnection
         Cached SQL connection resolved from Streamlit secrets and optional
-        environment configuration.
+        environment configuration. Uses the same pool recycling settings as
+        `darb_solar.db.get_engine` for idle Supabase drops.
     """
-    return st.connection(_resolve_streamlit_connection_name(), type="sql")
+    return st.connection(
+        _resolve_streamlit_connection_name(),
+        type="sql",
+        pool_pre_ping=True,
+        pool_recycle=280,
+    )
+
+
+def _warmup_streamlit_connection(conn: SQLConnection) -> None:
+    """Ping until the DB accepts a connection or retries are exhausted.
+
+    Parameters
+    ----------
+    conn : SQLConnection
+        Streamlit SQL connection that may fail on the first attempt while
+        Supabase is waking from idle.
+    """
+    for attempt in range(1, _CONNECT_ATTEMPTS + 1):
+        try:
+            with conn.session as session:
+                session.execute(text("SELECT 1"))
+            return
+        except OperationalError:
+            if attempt >= _CONNECT_ATTEMPTS:
+                raise
+            time.sleep(_CONNECT_RETRY_SECONDS)
+            conn.reset()
 
 
 @contextmanager
 def _get_streamlit_session() -> Iterator[DbSession]:
     """Yield a SQLAlchemy session sourced from Streamlit's SQL connection.
+
+    Warms the connection with a short retry loop so a cold Supabase wake-up
+    does not fail the first dashboard query.
 
     Yields
     ------
@@ -72,7 +109,9 @@ def _get_streamlit_session() -> Iterator[DbSession]:
         SQLAlchemy session compatible with the existing `darb_solar.db.reads`
         helpers.
     """
-    with _get_streamlit_sql_connection().session as session:
+    conn = _get_streamlit_sql_connection()
+    _warmup_streamlit_connection(conn)
+    with conn.session as session:
         yield cast(DbSession, session)
 
 
