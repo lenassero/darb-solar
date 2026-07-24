@@ -10,6 +10,7 @@ from loguru import logger
 from darb_solar.db import (
     DbSession,
     Device,
+    DeviceRole,
     Plant,
     get_latest_collected_at,
     get_session,
@@ -197,8 +198,9 @@ def sync_intraday_devices(
     plant: Plant,
     devices: list[Device],
     min_gap: timedelta = _MIN_SYNC_GAP,
+    device_role: DeviceRole | None = None,
 ) -> tuple[list[DeviceSyncResult], datetime, datetime]:
-    """Incrementally sync all devices and return per-device results.
+    """Incrementally sync devices and return per-device results.
 
     Parameters
     ----------
@@ -212,23 +214,31 @@ def sync_intraday_devices(
         Devices registered for the plant.
     min_gap : timedelta, optional
         Skip a device when ``now - start`` is shorter than this interval.
+    device_role : DeviceRole or None, optional
+        When set, sync only the device with this role. Plant window bounds
+        are still computed across all ``devices``.
 
     Returns
     -------
     tuple[list[DeviceSyncResult], datetime, datetime]
         Per-device outcomes plus ``(collected_from, collected_to)`` bounds
         for plant derivation: earliest per-device ``start_dt`` from
-        ``_intraday_bounds`` through ``now``.
+        ``_intraday_bounds`` across all plant devices through ``now``.
     """
     tz = plant_timezone(plant)
     now = datetime.now(tz)
     earliest_start: datetime | None = None
-    device_results: list[DeviceSyncResult] = []
-
     for device in devices:
-        start_dt, end_dt = _intraday_bounds(session, device, now=now)
+        start_dt, _end_dt = _intraday_bounds(session, device, now=now)
         if earliest_start is None or start_dt < earliest_start:
             earliest_start = start_dt
+
+    devices_to_sync = (
+        [_device_by_role(devices, device_role)] if device_role is not None else devices
+    )
+    device_results: list[DeviceSyncResult] = []
+    for device in devices_to_sync:
+        start_dt, end_dt = _intraday_bounds(session, device, now=now)
         device_results.append(
             sync_device_intraday(
                 fusionsolar_session,
@@ -252,6 +262,8 @@ def sync_intraday(
     database_url: str | None = None,
     fusionsolar_session: FusionSolarSession | None = None,
     min_gap: timedelta = _MIN_SYNC_GAP,
+    device_role: DeviceRole | None = None,
+    derive_plant: bool = True,
 ) -> SyncRunResult:
     """Login, load DB config, and incrementally sync a plant.
 
@@ -270,6 +282,10 @@ def sync_intraday(
         Existing authenticated session. When omitted, a new login is performed.
     min_gap : timedelta, optional
         Skip a device when ``now - start`` is shorter than this interval.
+    device_role : DeviceRole or None, optional
+        When set, sync only the device with this role.
+    derive_plant : bool, optional
+        When ``False``, skip plant metric derivation after device sync.
 
     Returns
     -------
@@ -281,9 +297,17 @@ def sync_intraday(
     with get_session(database_url) as session:
         plant, devices = load_plant_config(session, plant_code)
 
-        logger.info(
-            f"Intraday sync for plant {plant_code} " f"across {len(devices)} device(s)"
-        )
+        if device_role is not None:
+            logger.info(
+                f"Intraday sync for plant {plant_code} "
+                f"role={device_role.value} "
+                f"(derive_plant={derive_plant})"
+            )
+        else:
+            logger.info(
+                f"Intraday sync for plant {plant_code} "
+                f"across {len(devices)} device(s)"
+            )
 
         device_results, collected_from, collected_to = sync_intraday_devices(
             active_fusionsolar_session,
@@ -291,6 +315,7 @@ def sync_intraday(
             plant=plant,
             devices=devices,
             min_gap=min_gap,
+            device_role=device_role,
         )
 
         synced = 0
@@ -309,7 +334,7 @@ def sync_intraday(
                     failed += 1
 
         plant_readings_upserted = 0
-        if synced > 0:
+        if derive_plant and synced > 0:
             plant_readings_upserted = sync_plant_intraday(
                 session,
                 plant=plant,
