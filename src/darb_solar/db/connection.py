@@ -83,7 +83,13 @@ def get_engine(database_url: str | None = None) -> Engine:
     """
     url = resolve_database_url(database_url)
     if url not in _engines:
-        _engines[url] = create_engine(url)
+        # Supabase (and similar) drop idle connections during FusionSolar
+        # rate-limit waits (~300s), so recycle early and ping before use.
+        _engines[url] = create_engine(
+            url,
+            pool_pre_ping=True,
+            pool_recycle=280,
+        )
         _session_factories[url] = sessionmaker(bind=_engines[url])
     return _engines[url]
 
@@ -98,6 +104,9 @@ def _get_session_factory(database_url: str | None = None) -> sessionmaker[Sessio
 def get_session(database_url: str | None = None) -> Iterator[Session]:
     """Yield a SQLAlchemy session with automatic commit or rollback.
 
+    Callers may ``commit()`` or ``rollback()`` mid-run; the context still
+    commits on clean exit and rolls back on exception.
+
     Parameters
     ----------
     database_url : str or None, optional
@@ -108,5 +117,12 @@ def get_session(database_url: str | None = None) -> Iterator[Session]:
     sqlalchemy.orm.Session
         Open database session.
     """
-    with _get_session_factory(database_url).begin() as session:
+    session = _get_session_factory(database_url)()
+    try:
         yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()

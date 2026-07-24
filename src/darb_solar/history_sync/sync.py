@@ -7,6 +7,7 @@ from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
 from loguru import logger
+from sqlalchemy import text
 
 from darb_solar.db import (
     DEFAULT_TIMEZONE_NAME,
@@ -311,6 +312,20 @@ def history_records_to_readings(
     return readings
 
 
+def _ensure_session_alive(session: DbSession) -> None:
+    """Ping the DB and clear a dead transaction after long API waits.
+
+    Parameters
+    ----------
+    session : DbSession
+        Open SQLAlchemy session that may hold a closed connection.
+    """
+    try:
+        session.execute(text("SELECT 1"))
+    except Exception:
+        session.rollback()
+
+
 def sync_device_day_window(
     fusionsolar_session: FusionSolarSession,
     session: DbSession,
@@ -362,7 +377,7 @@ def sync_device_day_window(
         status=SyncWindowCheckpointStatus.PENDING,
         error_message=None,
     )
-    session.flush()
+    session.commit()
 
     try:
         records = _fetch_device_history(
@@ -371,6 +386,7 @@ def sync_device_day_window(
             start_ms=window.start_ms,
             end_ms=window.end_ms,
         )
+        _ensure_session_alive(session)
         synced_at = utc_now()
         readings = history_records_to_readings(
             records,
@@ -389,21 +405,29 @@ def sync_device_day_window(
             status=SyncWindowCheckpointStatus.DONE,
             error_message=None,
         )
-        session.flush()
+        session.commit()
         logger.info(
             f"Synced dev_id={dev_id} day={window.day}: " f"{len(readings)} reading(s)"
         )
         return DeviceSyncResult(len(readings), SyncRunOutcome.DONE)
     except Exception as exc:
-        persist_sync_window(
-            session,
-            dev_id=dev_id,
-            window_start=window.window_start,
-            window_end=window.window_end,
-            status=SyncWindowCheckpointStatus.FAILED,
-            error_message=str(exc),
-        )
-        session.flush()
+        session.rollback()
+        try:
+            persist_sync_window(
+                session,
+                dev_id=dev_id,
+                window_start=window.window_start,
+                window_end=window.window_end,
+                status=SyncWindowCheckpointStatus.FAILED,
+                error_message=str(exc),
+            )
+            session.commit()
+        except Exception as persist_exc:
+            session.rollback()
+            logger.error(
+                f"Could not persist failed checkpoint for "
+                f"dev_id={dev_id} day={window.day}: {persist_exc}"
+            )
         logger.error(f"Failed dev_id={dev_id} day={window.day}: {exc}")
         return DeviceSyncResult(0, SyncRunOutcome.FAILED)
 
@@ -554,6 +578,7 @@ def sync_plant_day_window(
     )
     for reading in plant_readings:
         upsert_plant_power_reading(session, reading)
+    session.commit()
     logger.info(
         f"Derived plant metrics for day={window.day}: "
         f"{len(plant_readings)} reading(s)"
