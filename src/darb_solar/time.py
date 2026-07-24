@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-# Plant local time (Morocco, UTC+1 year-round).
+# Plant local time (Morocco; offset can change around Ramadan).
 DEFAULT_TIMEZONE = ZoneInfo("Africa/Casablanca")
 
 
@@ -33,6 +33,9 @@ def day_bounds_epoch_ms(
     tz: ZoneInfo = DEFAULT_TIMEZONE,
 ) -> tuple[int, int]:
     """Return ``(start_ms, end_ms)`` for a calendar day in ``tz``.
+
+    Bounds are local midnights. Around Casablanca Ramadan clock changes
+    that interval can be 23h or 25h in UTC (not always 24h).
 
     Parameters
     ----------

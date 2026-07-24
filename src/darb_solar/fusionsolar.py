@@ -25,7 +25,7 @@ _DEV_LIST_PATH = "/thirdData/getDevList"
 _DEV_REAL_KPI_PATH = "/thirdData/getDevRealKpi"
 _DEVICE_HISTORY_PATH = "/rest/openapi/pvms/nbi/v1/device/history"
 
-_HISTORY_MAX_WINDOW_MS = 24 * 60 * 60 * 1000
+HISTORY_MAX_WINDOW_MS = 24 * 60 * 60 * 1000
 # One inverter + one meter: 1/60/10 + 1/60/10 = 0.0033… calls/s → 300 s between calls.
 _HISTORY_CALLS_PER_SECOND = 2 / 600
 _HISTORY_MIN_INTERVAL_SECONDS = 1 / _HISTORY_CALLS_PER_SECOND
@@ -369,7 +369,7 @@ class FusionSolarClient:
         if start_time_ms >= end_time_ms:
             raise ValueError("start_time_ms must be less than end_time_ms")
         window_ms = end_time_ms - start_time_ms
-        if window_ms > _HISTORY_MAX_WINDOW_MS:
+        if window_ms > HISTORY_MAX_WINDOW_MS:
             raise ValueError("Time range exceeds 24 hours")
         payload = self._post(
             _DEVICE_HISTORY_PATH,
