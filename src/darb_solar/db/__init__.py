@@ -25,7 +25,6 @@ from darb_solar.db.reads import (
     get_sync_window,
     list_device_power_readings,
     list_devices,
-    list_plant_power_readings,
 )
 from darb_solar.db.time import utc_now
 from darb_solar.db.types import DeviceRole, SyncWindowCheckpointStatus
@@ -59,7 +58,6 @@ __all__ = [
     "get_sync_window",
     "list_device_power_readings",
     "list_devices",
-    "list_plant_power_readings",
     "resolve_database_url",
     "upsert_device",
     "upsert_device_power_reading",
