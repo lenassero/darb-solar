@@ -491,6 +491,13 @@ def _render_month_view(
 
     hourly_fig = build_hourly_mean_energy_chart(df)
     hourly_fig.update_layout(
+        legend={
+            "orientation": "h",
+            "yanchor": "top",
+            "y": -0.28,
+            "xanchor": "center",
+            "x": 0.5,
+        },
         title="Consommation horaire moyenne",
     )
     st.plotly_chart(
