@@ -300,9 +300,10 @@ Both jobs POST to the same Cloud Run service (`darb-solar-intraday`) with
 | `darb-solar-intraday-inverter` | `0,30 * * * *` | `{"role":"inverter","derive_plant":false}` |
 | `darb-solar-intraday-meter` | `6,36 * * * *` | `{"role":"meter","derive_plant":true}` |
 
-Job A writes inverter readings only. Job B writes meter readings, then derives
-plant metrics over the same half-open window (using inverter rows already
-stored by job A).
+Job A writes inverter readings only. Job B writes meter readings, then
+re-derives plant metrics over a **1-hour lookback** from rows already in the
+DB. That window lets staggered `:00`/`:30` holes self-heal when a reading was
+missing at that clock time but landed in a later sync.
 
 The older single job `darb-solar-intraday-sync` is deleted on deploy if it
 still exists.

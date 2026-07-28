@@ -36,6 +36,7 @@ from darb_solar.history_sync.types import (
 from darb_solar.time import datetime_to_epoch_ms
 
 _MIN_SYNC_GAP = timedelta(minutes=5)
+_PLANT_DERIVE_LOOKBACK = timedelta(hours=1)
 
 
 def _intraday_bounds(
@@ -58,6 +59,26 @@ def _intraday_bounds(
     if latest_collected_at is None or latest_collected_at < start_of_yesterday:
         return start_of_today, now
     return latest_collected_at, now
+
+
+def _plant_derive_bounds(now: datetime) -> tuple[datetime, datetime]:
+    """Return ``(derive_from, derive_to)`` for plant metric derivation.
+
+    Uses a fixed lookback from ``now`` so staggered device syncs can still heal
+    interior ``:00``/``:30`` holes after a later ``:05``/``:10`` row already
+    exists.
+
+    Parameters
+    ----------
+    now : datetime
+        Current plant-local time (timezone-aware).
+
+    Returns
+    -------
+    tuple[datetime, datetime]
+        Inclusive lower bound and exclusive-style upper bound (``now``).
+    """
+    return now - _PLANT_DERIVE_LOOKBACK, now
 
 
 def sync_device_intraday(
@@ -215,23 +236,16 @@ def sync_intraday_devices(
     min_gap : timedelta, optional
         Skip a device when ``now - start`` is shorter than this interval.
     device_role : DeviceRole or None, optional
-        When set, sync only the device with this role. Plant window bounds
-        are still computed across all ``devices``.
+        When set, sync only the device with this role.
 
     Returns
     -------
     tuple[list[DeviceSyncResult], datetime, datetime]
-        Per-device outcomes plus ``(collected_from, collected_to)`` bounds
-        for plant derivation: earliest per-device ``start_dt`` from
-        ``_intraday_bounds`` across all plant devices through ``now``.
+        Per-device outcomes plus ``(derive_from, derive_to)`` bounds
+        for plant derivation from ``_plant_derive_bounds`` (1h lookback).
     """
     tz = plant_timezone(plant)
     now = datetime.now(tz)
-    earliest_start: datetime | None = None
-    for device in devices:
-        start_dt, _end_dt = _intraday_bounds(session, device, now=now)
-        if earliest_start is None or start_dt < earliest_start:
-            earliest_start = start_dt
 
     devices_to_sync = (
         [_device_by_role(devices, device_role)] if device_role is not None else devices
@@ -251,9 +265,13 @@ def sync_intraday_devices(
             )
         )
 
-    if earliest_start is None:
-        earliest_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    return device_results, earliest_start, now
+    # Re-derive plant metrics over the last hour, not from the latest plant
+    # row. Inverter (:00/:30) and meter (:06/:36) syncs are staggered, so a
+    # :00/:30 plant hole (reading not available then, but present in a later
+    # sync) can sit behind newer :05/:10 rows; a forward-only cursor would
+    # never revisit it.
+    derive_from, derive_to = _plant_derive_bounds(now)
+    return device_results, derive_from, derive_to
 
 
 def sync_intraday(
@@ -269,8 +287,9 @@ def sync_intraday(
 
     Fetches history from each device's latest ``collected_at`` when that falls
     on today or yesterday (so midnight can close the overnight gap), otherwise
-    from start of today, through now. Does not touch ``sync_windows``
-    checkpoints.
+    from start of today, through now. When ``derive_plant`` is true, plant
+    metrics are re-derived over a 1h lookback even if every device sync was
+    skipped. Does not touch ``sync_windows`` checkpoints.
 
     Parameters
     ----------
@@ -309,7 +328,7 @@ def sync_intraday(
                 f"across {len(devices)} device(s)"
             )
 
-        device_results, collected_from, collected_to = sync_intraday_devices(
+        device_results, derive_from, derive_to = sync_intraday_devices(
             active_fusionsolar_session,
             session,
             plant=plant,
@@ -334,13 +353,13 @@ def sync_intraday(
                     failed += 1
 
         plant_readings_upserted = 0
-        if derive_plant and synced > 0:
+        if derive_plant:
             plant_readings_upserted = sync_plant_intraday(
                 session,
                 plant=plant,
                 devices=devices,
-                collected_from=collected_from,
-                collected_to=collected_to,
+                collected_from=derive_from,
+                collected_to=derive_to,
             )
 
         return SyncRunResult(
