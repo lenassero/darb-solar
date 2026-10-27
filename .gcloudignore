@@ -22,7 +22,6 @@ app/
 src/darb_solar/viz/
 
 # Local and dashboard tooling (not needed by the sync function)
-.devcontainer/
 .streamlit/
 
 # Local DB/migration helpers not used at runtime

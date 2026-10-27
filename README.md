@@ -41,40 +41,16 @@ entrypoint lives in `app/streamlit_app.py`, and Streamlit checks that
 directory first when resolving app dependencies. The Streamlit app imports
 the local `darb_solar` package from `src/` directly.
 
-## Local database
+## Database (Supabase)
 
-This project uses the **Postgres 16** instance already installed on your Mac
-(`/Library/PostgreSQL/16`). Create the application role, database, and tables
-once:
-
-```bash
-# Prompts for the postgres superuser password from install
-./scripts/setup_native_postgres.sh
-
-# Or non-interactive:
-PGPASSWORD='your-postgres-password' ./scripts/setup_native_postgres.sh
-```
-
-The setup script runs `scripts/setup_native_postgres.sql` (role and database)
-and `scripts/setup_schema.sql` (application tables). Re-run only on a fresh
-database; there is no automatic schema migration at runtime.
-
-### Database access
+Production data lives in Supabase Postgres. Apply `scripts/setup_schema.sql`
+once to a fresh project; there is no automatic schema migration at runtime.
 
 The database layer uses [SQLAlchemy](https://www.sqlalchemy.org/) 2.0 ORM with
 the psycopg3 driver. Row types such as `Plant` and `Device` are ORM model
 classes exported from `darb_solar.db`; open a session with `get_session()`.
 
-Use the psycopg3 driver in `DARB_SOLAR_DATABASE_URL`
-(`postgresql+psycopg://...`).
-
-### Docker alternative
-
-`docker compose up -d` is available if you prefer a containerized database.
-Use a different host port when native Postgres already listens on 5432 (for
-example `5433:5432` in `docker-compose.yml` and update
-`DARB_SOLAR_DATABASE_URL` accordingly). Apply `scripts/setup_schema.sql` to
-the container database once after it starts.
+Use the psycopg3 driver in connection URLs (`postgresql+psycopg://...`).
 
 ## Configuration
 
@@ -84,20 +60,18 @@ Create a `.env` file in the project root (never commit it):
 FUSIONSOLAR_USERNAME=your@email.com
 FUSIONSOLAR_SYSTEM_CODE=your-system-code
 DARB_SOLAR_PLANT_CODE=NE=182468888
-DARB_SOLAR_DATABASE_URL=postgresql+psycopg://darb_solar:darb_solar@localhost:5432/darb_solar
-```
+DARB_SOLAR_DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST:5432/postgres
+```v
 
-`DARB_SOLAR_DATABASE_URL` points the application at your local Postgres instance
-(default: `postgresql+psycopg://darb_solar:darb_solar@localhost:5432/darb_solar`). The
-same URL format works for hosted Postgres providers (Neon, Supabase, and
-similar) when you deploy later.
+`DARB_SOLAR_DATABASE_URL` is used by the sync CLI, bootstrap scripts, and the
+Cloud Run sync deployment. In Supabase, take it from `Connect to your project`
+-> `Direct connection string` -> `Direct connection`.
 
 ### Streamlit SQL secret
 
 The Streamlit dashboard uses its own SQL connection secret and does not read
-`DARB_SOLAR_DATABASE_URL` by default. That keeps the deployed dashboard free to
-use a Supabase IPv4 shared pooler while the sync code continues to use the
-repository-wide database URL.
+`DARB_SOLAR_DATABASE_URL` by default. That lets the dashboard use the Supabase
+IPv4 shared pooler while sync keeps the direct connection.
 
 By default, `app/streamlit_app.py` opens `st.connection("supabase", type="sql")`.
 Set the secret in Streamlit Community Cloud under `Secrets`, or locally in
@@ -108,18 +82,8 @@ Set the secret in Streamlit Community Cloud under `Secrets`, or locally in
 url = "postgresql+psycopg://USER:PASSWORD@HOST:6543/postgres?sslmode=require"
 ```
 
-Point `url` at the Supabase IPv4-compatible session pooler or transaction
-endpoint you want the dashboard to use. Keep `DARB_SOLAR_DATABASE_URL` for the
-sync CLI, bootstrap scripts, and Cloud Run sync deployment.
-
-In Supabase, the working split is:
-
-- For the Streamlit dashboard, use `Connect to your project` ->
-  `Direct connection string` -> `Session pooler`. This is the IPv4 shared
-  pooler that worked with Streamlit Community Cloud.
-- For `DARB_SOLAR_DATABASE_URL`, use `Connect to your project` ->
-  `Direct connection string` -> `Direct connection`. Keep this for the sync
-  CLI, bootstrap scripts, and Cloud Run sync deployment.
+Point `url` at the Supabase IPv4-compatible session pooler
+(`Connect to your project` -> `Direct connection string` -> `Session pooler`).
 
 If you need a different Streamlit connection name, set
 `DARB_SOLAR_STREAMLIT_SQL_CONNECTION` in the app environment and create the
@@ -177,11 +141,15 @@ row and does not call the API again. See docstrings in
 ## Automation (Cloud Run)
 
 Near-real-time device readings run on Cloud Run, triggered by Cloud Scheduler
-every 30 minutes. FusionSolar enforces ~300s between history calls; sleeping
-inside a single request would bill several minutes of Cloud Run CPU every
-tick. The deploy script attaches **two staggered jobs** that each sync one
-device instead. The 6-minute gap keeps those waits outside Cloud Run, so each
-invocation is only a few seconds of billed compute.
+every 30 minutes. The HTTP entrypoint is `main.py` at the repository root
+(functions-framework handler `sync`). Deploy packages that file with the
+source tree via `./scripts/deploy_cloudrun_intraday.sh`.
+
+FusionSolar enforces ~300s between history calls; sleeping inside a single
+request would bill several minutes of Cloud Run CPU every tick. The deploy
+script attaches **two staggered jobs** that each sync one device instead. The
+6-minute gap keeps those waits outside Cloud Run, so each invocation is only a
+few seconds of billed compute.
 
 Deploy or refresh with:
 
@@ -217,5 +185,12 @@ still exists.
 | `role` | `inverter` or `meter` | omitted = sync all devices |
 | `derive_plant` | `true` or `false` | `false` when `role` is set; `true` when the body is empty / has no `role` |
 
-Local CLI (`scripts/sync_fusionsolar_intraday.py`) still syncs all devices in
-one process; in-process waits are fine off Cloud Run.
+### Manual intraday (debug)
+
+For a one-off local run (for example after a failed Cloud Run tick), use the
+CLI. It calls the same `sync_intraday` logic as `main.py`, syncs all devices
+in one process, and loads `.env`:
+
+```bash
+uv run python scripts/sync_fusionsolar_intraday.py
+```

@@ -1,5 +1,5 @@
 -- Application tables for darb-solar.
--- Run against the darb_solar database after setup_native_postgres.sql.
+-- Apply once to a fresh Supabase (or other Postgres) database.
 
 CREATE TABLE plants (
     plant_code TEXT PRIMARY KEY,
