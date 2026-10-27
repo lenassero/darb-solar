@@ -21,8 +21,7 @@ notebooks/
 app/
 src/darb_solar/viz/
 
-# Local scheduler and dev tooling
-launchd/
+# Local and dashboard tooling (not needed by the sync function)
 .devcontainer/
 .streamlit/
 
