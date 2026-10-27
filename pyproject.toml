@@ -30,6 +30,9 @@ dev = [
   "ipdb>=0.13.13",
   "jupyter",
   "pre-commit",
+  "pytest>=9.1.1",
+  "pytest-cov>=7.1.0",
+  "pytest-mock>=3.17.0",
 ]
 
  [build-system]
@@ -38,3 +41,8 @@ dev = [
 
  [tool.hatch.build.targets.wheel]
  packages = ["src/darb_solar"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "--import-mode=importlib"
